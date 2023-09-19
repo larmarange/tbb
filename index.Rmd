@@ -2143,6 +2143,8 @@ renderUI({
 
 Partie à rédiger
 
+**Modèle Excel pour les métadonnées :** [metadonnees_model.xlsx](https://github.com/larmarange/tbb/raw/main/metadonnees_modele.xlsx)
+
 **MAP colonnes obligatoires :**
 
 ```{r, results='asis'}
