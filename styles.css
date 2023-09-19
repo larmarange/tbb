@@ -72,6 +72,6 @@
   font-size: .9em;
 }
 
-tr:has(> .groupe_ventilation) {
+tr:has(.groupe_ventilation) td {
   font-weight: bold;
 }

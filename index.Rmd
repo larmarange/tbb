@@ -2006,7 +2006,7 @@ tableau_consommation_ventilation <- reactive({
   tbl |> 
     mutate(
       `Part consommée` = scales::percent(
-        (`Prévisionnel` - `Total consommé`) / `Prévisionnel`,
+        `Total consommé` / `Prévisionnel`,
         accuracy = .1
       ),
       Disponible = `Prévisionnel` - `Total consommé`
