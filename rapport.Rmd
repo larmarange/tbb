@@ -1,0 +1,148 @@
+---
+title: "`r params$nom`"
+output: pdf_document
+date: "Tableau de Bord Budgétaire - `r format(Sys.time(), '%d %B %Y')`"
+classoption: landscape
+params:
+  nom: NA
+  metas: NA
+  budget_total_hors_fg: NA
+  total_reserve: NA
+  total_engage: NA
+  total_paye: NA
+  total_bloque: NA
+  total_disponible: NA
+  tableau_repartition: NA
+  depenses: NA
+  tableau_personnel: NA
+  plot_conso_annuelle: NA
+  tableau_consommation_annuelle: NA
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+
+label_euro <- scales::label_dollar(
+  accuracy = .01,
+  prefix = "",
+  suffix = " €",
+  decimal.mark = ","
+)
+```
+
+# Fiche signalétique
+
+```{r, results='asis'}
+format_meta <- function(meta, libelle, date = FALSE) {
+    meta <- params$metas[[meta]]
+    if (is.null(meta) || is.na(meta)) return("")
+    if (date) meta <- format(meta, format = "%d %B %Y")
+    paste0(
+      "- **",
+      libelle,
+      " :** ",
+      meta,
+      "\n\n"
+    )
+}
+```
+
+`r format_meta("porteur", "Porteur")`
+`r format_meta("charge_projet", "Chargé·e de projet")`
+`r format_meta("bailleur", "Bailleur / Financeur")`
+`r format_meta("gestionnaire", "Organisme gestionnaire")`
+`r format_meta("eotp", "eOTP(s)")`
+`r format_meta("contrat", "Numéro de contrat")`
+`r format_meta("debut", "Début", date = TRUE)`
+`r format_meta("fin", "Fin", date = TRUE)`
+- **Frais de gestion :** `r params$metas$frais_gestion |> label_euro()`
+- **Budget total hors frais de gestion :** `r params$budget_total_hors_fg |> label_euro()`
+- **Budget total (frais de gestion inclus) :** `r (params$budget_total_hors_fg + params$metas$frais_gestion) |> label_euro()`
+
+# Consommation du budget
+
+```{r}
+total_consomme <- params$budget_total_hors_fg - params$total_disponible
+prop_consomme <- total_consomme / params$budget_total_hors_fg
+```
+
+- **Réservé :** `r params$total_reserve |> label_euro()`
+- **Engagé (non payé) :** `r params$total_engage |> label_euro()`
+- **Payé :** `r params$total_paye |> label_euro()`
+- **Bloqué :** `r params$total_bloque |> label_euro()`
+- **Consommation totale :** `r total_consomme |> label_euro()` (`r prop_consomme |> scales::percent(accuracy = .1, decimal.mark = ",")``)
+- **DISPONIBLES : `r params$total_disponible |> label_euro()`**
+
+
+# Répartition budgétaire prévisionnelle
+
+```{r, results='asis'}
+params$tableau_repartition |> 
+  knitr::kable(format = "latex") |> 
+  print()
+```
+
+# Consommation annuelle
+
+```{r, fig.width=11}
+p <- params$plot_conso_annuelle
+
+if (!is.null(p) && !is.na(p))
+  p +
+    scale_y_continuous(labels = scales::label_number(accuracy = .01, big.mark = " ", decimal.mark = ","))
+```
+
+```{r, results='asis'}
+params$tableau_consommation_annuelle |> 
+  knitr::kable(format = "latex") |> 
+  print()
+```
+
+
+# Prévisionnel RH
+
+```{r, results='asis'}
+tbl <- params$tableau_personnel
+
+if (!"Année" %in% names(tbl)) {
+  cat("Aucun prévisionnel RH.")  
+} else {
+  tbl |> 
+    knitr::kable(format = "latex") |> 
+    print()
+}
+```
+
+
+# Détail des dépenses
+
+```{r, results='asis'}
+if (!is.null(params$depenses) && is.data.frame(params$depenses)) {
+  dep <- params$depenses |> 
+    select(-id) |> 
+    mutate(
+      description = description |> str_trunc(50),
+      groupe = trunc(1:n() / 25)
+    ) |> 
+    rename(
+      `Nature de la dépense` = nature,
+      `Année` = annee,
+      `Description` = description,
+      `Total` = montant,
+      `Réservé` = reserve,
+      `Engagé (non payé)` = engage,
+      `Payé` = paye,
+      `Bloqué` = bloque
+    )
+  for (i in unique(dep$groupe)) {
+    dep |> 
+      filter(groupe == i) |> 
+      select(-groupe) |> 
+      knitr::kable(format = "latex") |> 
+      print()
+  }
+}
+```

@@ -1,0 +1,77 @@
+.chart-title {
+  font-size: 1.1em;
+  font-weight: bold;
+}
+
+#rapport, #reset {
+  width: 100%;
+  padding: 15px;
+}
+
+#rapport {
+  margin-bottom: 20px;
+}
+
+.chart-stage a#export_ventilation.shiny-bound-output,
+.chart-stage a#export_ventilation2.shiny-bound-output{
+  width: auto !important;
+  height: auto !important;
+  padding: 15px;
+}
+
+#section-depenses > .section,
+#section-nom-du-projet {
+  background-color: white;
+  border: 1px solid #e2e2e2;
+  border-radius: 3px;
+  padding: 5px;
+}
+
+#section-nom-du-projet {
+  margin-right: 5px;
+  margin-bottom: 5px;
+  padding-left: 10px;
+}
+
+#section-nom-du-projet h1 {
+  font-weight: bold;
+  margin: 0;
+  padding: 0;
+}
+
+#section-nom-du-projet p {
+  display: none;
+}
+
+#section-sidebar p {
+  margin: 5px 0;
+}
+
+#section-details-map .section {
+  background-color: transparent;
+}
+
+.une_depense {
+  margin: 5px;
+  margin-bottom: 15px;
+  padding: 10px;
+  background-color: white;
+  border: 1px solid #e2e2e2;
+  border-radius: 3px;
+  font-size: .9em;
+}
+
+.une_depense_details {
+  display: none;
+  overflow-x: scroll;
+  border: 1px solid #e2e2e2;
+  margin: 5px 0;
+}
+
+.une_depense_details table {
+  font-size: .9em;
+}
+
+tr:has(> .groupe_ventilation) {
+  font-weight: bold;
+}

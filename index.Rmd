@@ -1,0 +1,2156 @@
+---
+title: "Tableau de Bord Budgétaire"
+output:
+  flexdashboard::flex_dashboard:
+    vertical-layout: scroll
+    theme: 
+      version: 4
+      bootswatch: yeti
+    css: styles.css
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(DT)
+library(plotly)
+library(shiny)
+library(shinyjs)
+library(kableExtra)
+library(DataEditR)
+library(datamods)
+
+options(scipen=999) # désactiver notation scientifique
+
+useShinyjs(rmd = TRUE)
+
+`%||%` <- function (a, b) 
+{
+    if (!is.null(a) && length(a) > 0) 
+        a
+    else b
+}
+
+label_euro <- scales::label_dollar(
+  accuracy = .01,
+  prefix = "",
+  suffix = " €",
+  decimal.mark = ","
+)
+
+label_euro_bis <- scales::label_dollar(
+  accuracy = .01,
+  prefix = "",
+  suffix = "&nbsp;€",
+  decimal.mark = ",",
+  big.mark = "&nbsp;"
+)
+
+label_euro_gras <- function(x, prefixe = "") {
+  paste0(
+    if_else(x > 0, "<strong>", ""),
+    prefixe,
+    label_euro(x),
+    if_else(x > 0, "</strong>", "")
+  )
+}
+
+recoder_dates_excel <- function(x) {
+  x[x == "-"] <- NA
+  as.Date(as.integer(x), origin = "1899-12-30")
+}
+
+# Import métadonnées ----------
+
+lecture_metadonnees <- function(fichier) {
+  if (is.null(fichier))
+    return(NULL)
+  metas_long <- tryCatch(
+    readxl::read_excel(
+      fichier$datapath,
+      sheet = "metadonnees",
+      skip = 2
+    ),
+    error = function(e) {NULL}
+  )
+  
+  cols_metadonnees <- c("id", "description", "valeur")
+  if (!all(cols_metadonnees %in% names(metas_long)))
+    return(NULL)
+  
+  metas_long
+}
+
+transformer_metas <- function(metas_long) {
+  if (is.null(metas_long)) return(NULL)
+  
+  metas <- metas_long |>
+    filter(!is.na(id)) |> 
+    select(id, valeur) |>
+    tidyr::pivot_wider(
+      names_from = id,
+      values_from = valeur
+    ) |>
+    mutate(
+      # conversion des valeurs numériques
+      across(
+        c(budget, frais_gestion),
+        as.numeric
+      ),
+      # conversion des dates
+      across(
+        c(debut, fin),
+        recoder_dates_excel
+      )
+    )
+  metas
+}
+
+metas_long <- reactive(lecture_metadonnees(input$metadonnees_fichier))
+
+metas <- reactive(transformer_metas(metas_long()))
+
+# Import répartition budgétaire ------------
+
+lecture_repartition <- function(fichier) {
+  if (is.null(fichier))
+    return(NULL)
+
+   repartition <- tryCatch(
+    readxl::read_excel(
+      fichier$datapath,
+      sheet = "repartition",
+      skip = 2
+    ),
+    error = function(e) {NULL}
+  )
+  
+  cols_repartition <- c("annee", "type", "montant")
+  if (!all(cols_repartition %in% names(repartition)))
+    return(NULL)
+  
+  repartition|> 
+    filter(!is.na(annee) & !is.na(type)) |> 
+    tidyr::replace_na(list(montant = 0))
+}
+
+repartition <- reactive(lecture_repartition(input$metadonnees_fichier))
+
+budget_fonctionnement <- reactive({
+  if (is.null(repartition()))
+    return(NULL)
+  
+  repartition() |> 
+    filter(type == "Fonctionnement") |> 
+    pull("montant") |> 
+    sum(na.rm = TRUE)
+})
+
+budget_investissement <- reactive({
+  if (is.null(repartition()))
+    return(NULL)
+  repartition() |> 
+    filter(type == "Investissement") |> 
+    pull("montant") |> 
+    sum(na.rm = TRUE)
+})
+
+budget_personnel <- reactive({
+  if (is.null(repartition()))
+    return(NULL)
+  repartition() |> 
+    filter(type == "Personnel") |> 
+    pull("montant") |> 
+    sum(na.rm = TRUE)
+})
+
+budget_total_hors_fg <- reactive({
+  if (is.null(repartition()))
+    return(NULL)
+  budget_personnel() + budget_investissement() + budget_fonctionnement()
+})
+
+tableau_repartition <- reactive({
+  if (is.null(repartition()))
+    return(NULL)
+  
+  tbl <- repartition() |> 
+    group_by(type, annee) |> 
+    summarise(montant = sum(montant, na.rm = TRUE)) |> 
+    tidyr::pivot_wider(
+      names_from = annee,
+      values_from = montant,
+      values_fill = 0
+    ) |> 
+    mutate(
+      TOTAL = sum(c_across(where(is.numeric)))
+    )  
+     
+  somme <- tbl |> 
+    ungroup() |> 
+    summarise(across(where(is.numeric), sum)) |> 
+    mutate(type = "TOTAL")
+   
+  bind_rows(tbl, somme) |> 
+    rename(`Nature des dépenses` = type) |> 
+    mutate(across(where(is.numeric), label_euro))
+})
+
+# Import données RH -----------------
+
+lecture_personnel <- function(fichier) {
+  if (is.null(fichier))
+    return(NULL)
+  
+  personnel <- tryCatch(
+    readxl::read_excel(
+      fichier$datapath,
+      sheet = "personnel",
+      skip = 6
+    ),
+    error = function(e) {NULL}
+  )
+
+  cols_personnel <- c("id", "annee", "description", "reserve", "paye")
+  if (!all(cols_personnel %in% names(personnel)))
+    return(NULL)
+  
+  personnel <- personnel |> 
+    select(-any_of("total")) |> 
+    filter(!is.na(id)) |> 
+    tidyr::replace_na(list(reserve = 0, paye = 0))
+  
+  if (nrow(personnel) == 0)
+    return(tibble::tibble())
+  
+  personnel
+}
+
+personnel <- reactive(lecture_personnel(input$metadonnees_fichier))
+
+tableau_personnel <- reactive({
+  rh <- personnel()
+  if (is.null(rh)) return(NULL)
+  if (nrow(rh) == 0)
+    return(tibble(
+      Info = "Aucun prévisionnel RH n'est enregistrée.",
+      ` ` = "",
+      `  ` = "",
+      `   ` = "",
+      `    ` = "",
+      `     ` = ""
+    ))
+  rh |> 
+    select(-id) |> 
+    mutate(
+      annee = annee |> as.integer() |> as.character(),
+      total = reserve + paye
+    ) |> 
+    relocate(total, .after = paye) |> 
+    mutate(across(where(is.numeric), label_euro)) |> 
+    rename(
+      `Année` = annee,
+      `Description` = description,
+      `Réservé / Prévisionnel` = reserve,
+      `Payé (constaté via attestions RH)` = paye,
+      `Coût Total` = total,
+      `Notes` = notes
+    )
+})
+
+# Import autres dépenses du fichier métadonnées --------
+
+lecture_autres_depenses <- function(fichier) {
+  if (is.null(fichier))
+    return(NULL)
+  
+  autres_dep <- tryCatch(
+    readxl::read_excel(
+      fichier$datapath,
+      sheet = "autres_depenses",
+      skip = 7
+    ),
+    error = function(e) {NULL}
+  )
+  
+  if (is.null(autres_dep))
+    return(NULL)
+  
+  cols_autres_dep <- c("id", "nature", "annee", "description",
+                       "reserve", "engage", "paye", "bloque")
+  if (!all(cols_autres_dep %in% names(autres_dep)))
+    return(NULL)
+  
+  autres_dep <- autres_dep |> 
+    select(-any_of("total")) |> 
+    filter(!is.na(id))
+  
+  if (nrow(autres_dep) == 0)
+    return(tibble::tibble())
+  
+  autres_dep
+}
+
+autres_depenses <- reactive(lecture_autres_depenses(input$metadonnees_fichier))
+
+# Import MAP -------------
+
+cols_map_requises <- c(
+  "Exercice",
+  "Nature de dépenses",
+  "AE consommés",
+  "CP consommés",
+  "Solde réservations",
+  "Dépl. : N° déplacement",
+  "Cde achat : Num pièce",
+  "Résa : Texte",
+  "Blocage de fond",
+  "Fact : Num pièce FI"
+)
+
+cols_map_optionnelles <- c(
+  "eOTP : Code",
+  "CF - Code",
+  "Dépl :  Matricule",
+  "Dépl :  Nom",
+  "Dépl :  Prénom",
+  "Dépl. : Motif",
+  "Dépl : Pays",
+  "Blocage : Texte",
+  "Fournisseur : Nom 1",
+  "Cde achat : Texte correspondance",
+  "Cde achat : Texte entête",
+  "Cde achat : Texte note",
+  "Cde achat poste : Texte",
+  "Fact : Texte en-tête",
+  "Cpte gén : Libellé"
+)
+
+cols_map_dates_optionnelles <- c(
+  "Dépl. : Date de début",
+  "Dépl. : Date de fin",
+  "Cde achat : Date création",
+  "Fact : Date création"
+)
+
+cols_map_num_optionnelles <- c(
+  "Liquidé EJ année N",
+  "Liquidé EJ antérieurs"
+)
+
+cols_map_optionnelles_toutes <- c(
+  cols_map_optionnelles,
+  cols_map_dates_optionnelles,
+  cols_map_num_optionnelles
+) |> sort()
+
+map_trouver_mission_depuis_commande <- function(data, cmde) {
+  tmp <- data %>% 
+    filter(`Cde achat : Num pièce` == cmde) %>%
+    arrange(desc(`Dépl. : N° déplacement`))
+  if (nrow(tmp) >  0)
+    tmp$`Dépl. : N° déplacement`[1]
+  else
+    "-"
+}
+
+map_verif_existance_commande <- function(data, cmde) {
+  tmp <- data %>% 
+    filter(`Cde achat : Num pièce` == cmde)
+  if (nrow(tmp) >  0)
+    cmde
+  else
+    "-"
+}
+
+lecture_map <- function(fichier) {
+  if (is.null(fichier))
+    return(NULL)
+  
+  map <- readxl::read_excel(
+    fichier$datapath
+  ) |> 
+    slice(-1)
+  
+  if (!all(cols_map_requises %in% names(map)))
+    return(NULL)
+  
+  map <- 
+    map |> 
+    mutate(
+      # conversion des dates optionnelles
+      across(
+        any_of(cols_map_dates_optionnelles),
+        recoder_dates_excel
+      )
+    )
+  
+  # Traitement des colonnes optionnelles avec peuplement par défaut
+  for (col in cols_map_optionnelles) {
+    if (!col %in% names(map))
+      map[[col]] <- "-"
+  }
+  for (col in cols_map_dates_optionnelles) {
+    if (!col %in% names(map))
+      map[[col]] <- NA_Date_
+  }
+  for (col in cols_map_num_optionnelles) {
+    if (!col %in% names(map))
+      map[[col]] <- NA_real_
+  }
+  
+  map <- map |> 
+    # Récupérer les informations missions depuis Résa : Texte
+    extract(
+      `Résa : Texte`,
+      c("e_matricule", "e_nom", "e_deplacement"),
+      "^Mat\\.: ([0-9]+) (.*) Dép\\.: ([0-9]+)$",
+      remove = FALSE
+    ) |> 
+    tidyr::replace_na(list(
+      e_matricule = "-",
+      e_nom = "-",
+      e_deplacement = "-"
+    )) |> 
+    mutate(
+      `Dépl :  Matricule`= 
+        if_else(`Dépl :  Matricule` == "-", e_matricule, `Dépl :  Matricule`),
+      `Dépl :  Nom`= 
+        if_else(`Dépl :  Nom` == "-", e_nom, `Dépl :  Nom`),
+      `Dépl. : N° déplacement`= 
+        if_else(`Dépl. : N° déplacement` == "-", e_deplacement, `Dépl. : N° déplacement`),
+      `AE consommés` = round(`AE consommés`, digits = 0),
+      `Solde réservations` = round(`Solde réservations`, digits = 0),
+      `CP consommés` = round(`CP consommés`, digits = 0),
+      `Blocage de fond` = round(`Blocage de fond`, digits = 0)
+    )
+  
+  # si blocage de fonds, le numéro de commande peut être récupéré dans Blocage : Texte
+  map <- map |> 
+    rowwise() |> 
+    mutate(
+      `Dépl. : N° déplacement` = ifelse(
+        `Dépl. : N° déplacement` == "-" & `Cde achat : Num pièce` == "-" & `Blocage de fond` > 0 & `Blocage : Texte` != "-",
+        map_trouver_mission_depuis_commande(map, `Blocage : Texte`),
+        `Dépl. : N° déplacement`
+      ),
+      `Cde achat : Num pièce` = ifelse(
+        `Cde achat : Num pièce` == "-" & `Blocage de fond` > 0 & `Blocage : Texte` != "-",
+        map_verif_existance_commande(map, `Blocage : Texte`),
+        `Cde achat : Num pièce`
+      )
+    ) |> 
+    ungroup() |> 
+    mutate(
+      `Liquidé` = `Liquidé EJ année N` + `Liquidé EJ antérieurs`,
+      dplt = `Dépl. : N° déplacement`,
+      cmde = `Cde achat : Num pièce`,
+      fact = `Fact : Num pièce FI`,
+      type_depense = case_when(
+        dplt != "-" ~ "deplacement",
+        cmde != "-" ~ "commande",
+        fact != "-" ~ "facture", 
+        TRUE ~ "autre"
+      ),
+      id = case_when(
+        type_depense == "deplacement" ~ paste0("dplt_", dplt),
+        type_depense == "commande" ~ paste0("cmde_", cmde),
+        type_depense == "facture" ~ paste0("fact_", fact),
+        TRUE ~ paste0("autr_", `Nature de dépenses`, "_", Exercice) 
+      )
+    )
+  
+  map
+}
+
+"%p%" <- function(x, y) {paste0(x, y)}
+
+description_dplt <- function(nom, prenom, motif, pays, debut, fin) {
+  desc <- c("Mission")
+  if (nom != "-" && prenom == "-") desc <- desc %p% " " %p% nom
+  if (nom != "-" && prenom != "-") desc <- desc %p% " " %p% nom %p% " " %p% prenom
+  
+  date <- NULL
+  if (!is.na(debut) && !is.na(fin))
+    date <- format(debut, "%e %b %Y") %p% " à " %p% format(fin, "%e %b %Y")
+  lieu <- NULL
+  if (pays != "-") lieu <- "@ " %p% pays
+  date_lieu <- paste(date, lieu) |> str_trim()
+  if (length(date_lieu) == 0) date_lieu <- NULL
+  desc <- c(desc, date_lieu)
+
+  if (motif != "-") desc <- c(desc, motif)
+  
+  paste0(desc, collapse = ", ")
+}
+
+description_cmde <- function(date, fournisseur, texte_correspondance, poste, fact_entete, compte_general) {
+  if (!is.na(date)) {
+    date <- format(date, "%e %b %Y")
+  } else {
+    date <- NULL
+  }
+  if (fournisseur == "-") fournisseur <- NULL
+  if (texte_correspondance == "-") texte_correspondance <- NULL
+  if (poste == "-") poste <- NULL
+  if (fact_entete == "-") fact_entete <- NULL
+  if (compte_general == "-") compte_general <- NULL
+  paste(
+    c(date, fournisseur, texte_correspondance, poste, fact_entete, compte_general),
+    collapse = " / "
+  )
+}
+
+calcul_depenses_map <- function(map) {
+  if (is.null(map))
+    return(NULL)
+  
+  map <- map |> 
+    mutate(
+      nature = `Nature de dépenses`,
+      annee = Exercice,
+      reserve = `Solde réservations`,
+      ae = `AE consommés`,
+      paye = `CP consommés`,
+      bloque = `Blocage de fond`
+    )
+  
+  missions <- map |> 
+    filter(type_depense == "deplacement")
+  
+  if (nrow(missions) == 0) {
+    missions <- tibble::tibble()
+  } else {
+    missions <- missions |> 
+      arrange(dplt, desc(`Dépl. : Motif`)) |> 
+      group_by(dplt, id) |> 
+      summarise(
+        nature = first(nature),
+        annee = min(annee),
+        nom = first(`Dépl :  Nom`),
+        prenom = first(`Dépl :  Prénom`),
+        motif = first(`Dépl. : Motif`),
+        pays = first(`Dépl : Pays`),
+        debut = first(`Dépl. : Date de début`),
+        fin = first(`Dépl. : Date de fin`),
+        reserve = sum(reserve),
+        ae = sum(ae),
+        paye = sum(paye),
+        bloque = sum(bloque)
+      ) |> 
+      rowwise() |> 
+      mutate(
+        description = description_dplt(nom, prenom, motif, pays, debut, fin)
+      ) |> 
+      ungroup()
+  }
+  
+  commandes <- map |> 
+    filter(type_depense == "commande")
+  
+  if (nrow(commandes) == 0) {
+    commandes <- tibble::tibble()
+  } else {
+    commandes <- commandes |> 
+      arrange(cmde) |> 
+      group_by(cmde, id) |> 
+      summarise(
+        nature = first(nature),
+        annee = min(annee),
+        date = first(`Cde achat : Date création`),
+        fournisseur = first(`Fournisseur : Nom 1`),
+        texte_correspondance = first(`Cde achat : Texte correspondance`),
+        poste = paste(unique(`Cde achat poste : Texte`), collapse = ", "),
+        fact_entete = first(`Fact : Texte en-tête`),
+        compte_general = first(`Cpte gén : Libellé`),
+        reserve = sum(reserve),
+        ae = sum(ae),
+        paye = sum(paye),
+        bloque = sum(bloque)
+      ) |>  
+      rowwise() |> 
+      mutate(
+        description = description_cmde(date, fournisseur, texte_correspondance, poste, fact_entete, compte_general)
+      ) |>
+      ungroup()
+  }
+  
+  factures <- map |> 
+    filter(type_depense == "facture")
+  
+  if (nrow(factures) == 0) {
+    factures <- tibble::tibble()
+  } else {
+      factures <- factures |> 
+        arrange(fact) |> 
+        group_by(fact, id) |> 
+        summarise(
+          nature = first(nature),
+          annee = min(annee),
+          date = first(`Fact : Date création`),
+          fournisseur = first(`Fournisseur : Nom 1`),
+          fact_entete = first(`Fact : Texte en-tête`),
+          compte_general = first(`Cpte gén : Libellé`),
+          reserve = sum(reserve),
+          ae = sum(ae),
+          paye = sum(paye),
+          bloque = sum(bloque)
+        ) |>  
+        rowwise() |> 
+        mutate(
+          description = description_cmde(date, fournisseur, "-", "-", fact_entete, compte_general)
+        ) |>
+        ungroup()
+  }
+  
+  non_identifiees <- map |> 
+    filter(type_depense == "autre")
+  
+  if(nrow(non_identifiees) == 0) {
+    non_identifiees <- tibble::tibble()
+  } else {
+    non_identifiees <- non_identifiees |> 
+      group_by(annee, nature, id) |> 
+      summarise(
+        reserve = sum(reserve),
+        ae = sum(ae),
+        paye = sum(paye),
+        bloque = sum(bloque)
+      ) |>  
+      rowwise() |> 
+      mutate(
+        description = "Dépenses ", annee, " non identifiées de " %p% nature 
+      )
+  }
+  
+  bind_rows(missions, commandes, factures, non_identifiees) |> 
+    mutate(
+      engage = round(ae - paye - bloque, digits = 2),
+      annee = as.integer(annee)
+    ) |> 
+    select(nature, annee, id, description, reserve, engage, paye, bloque)
+}
+
+depenses_map_brutes <- reactive(input$map_fichier |> lecture_map())
+
+depenses_map <- reactive(depenses_map_brutes() |> calcul_depenses_map())
+
+
+# Création du fichier des dépenses ---------------
+
+depenses <- reactive({
+  dep_p <- personnel()
+  if(is.null(dep_p) || nrow(dep_p) == 0) {
+    dep_p <- tibble::tibble()
+  } else {
+    dep_p <- dep_p |>
+      mutate(
+        id = paste0("rh_", id),
+        nature = "Personnel",
+        engage = 0,
+        bloque = 0
+      ) |> 
+      select(nature, annee, id, description, reserve, engage, paye, bloque)
+  }
+  
+  dep_ad <- autres_depenses()
+  if (is.null(dep_ad) || nrow(dep_ad) == 0) {
+    dep_ad <- tibble::tibble()
+  } else {
+    dep_ad <- dep_ad |> 
+      select(nature, annee, id, description, reserve, engage, paye, bloque) |> 
+      mutate(
+        id = paste0("dep_", id),
+      )
+  }
+  
+  dep_ird_map <- depenses_map()
+  if (is.null(dep_ird_map)) {
+    dep_ird_map <- tibble::tibble()
+  } else {
+    dep_ird_map <- dep_ird_map|>
+        mutate(id = paste0("map_", id))
+  }
+  
+  dep <- bind_rows(dep_p, dep_ad, dep_ird_map)
+  
+  if (nrow(dep) == 0)
+    return(NULL)
+  
+  dep <- dep |> 
+    arrange(annee, nature, id) |> 
+    tidyr::replace_na(
+      list(reserve = 0, engage = 0, paye = 0, bloque = 0)
+    ) |> 
+    mutate(
+      montant = reserve + engage + paye + bloque
+    ) |> 
+    relocate(montant, .before = reserve) |> 
+    relocate(nature, id, .after = last_col())
+  
+  dep
+})
+
+# Calcul totaux des dépenses ---------
+
+total_reserve <- reactive({
+  dep <- depenses()
+  if (is.null(dep)) return(NULL)
+  
+  sum(dep$reserve, na.rm = TRUE)
+})
+
+total_engage <- reactive({
+  dep <- depenses()
+  if (is.null(dep)) return(NULL)
+  
+  sum(dep$engage, na.rm = TRUE)
+})
+
+total_paye <- reactive({
+  dep <- depenses()
+  if (is.null(dep)) return(NULL)
+  
+  sum(dep$paye, na.rm = TRUE)
+})
+
+total_bloque <- reactive({
+  dep <- depenses()
+  if (is.null(dep)) return(NULL)
+  
+  sum(dep$bloque, na.rm = TRUE)
+})
+
+total_disponible <- reactive({
+  total_hors_fg <- budget_total_hors_fg()
+  reserve <- total_reserve()
+  engage <- total_engage()
+  paye <- total_paye()
+  bloque <- total_bloque()
+  
+  if (any(
+    is.null(total_hors_fg),
+    is.null(reserve),
+    is.null(engage),
+    is.null(paye),
+    is.null(bloque)
+  )) return(NULL)
+  
+  total_hors_fg - reserve - engage - paye - bloque
+})
+
+proportion_consomme <- reactive({
+  budget <- budget_total_hors_fg()
+  disponible <- total_disponible()
+  
+  if (is.null(budget) || is.null(disponible)) return(NULL)
+  
+  (budget - disponible) / budget
+})
+
+# Consommation annuelle --------
+
+consommation_annuelle <- reactive({
+  dep <- depenses()
+  if (is.null(dep)) return(NULL)
+  
+  dep |> 
+    group_by(annee, nature) |> 
+    summarise(
+      reserve = sum(reserve),
+      engage = sum(engage),
+      paye = sum(paye),
+      bloque = sum(bloque),
+      consomme = sum(montant)
+    )
+})
+
+plot_conso_annuelle <- reactive({
+  conso <- consommation_annuelle()
+  if (is.null(conso)) return(NULL)
+  conso <- conso |> 
+    select(-consomme) |> 
+    pivot_longer(
+      cols = -c(annee, nature),
+      names_to = "type",
+      values_to = "montant"
+    ) |> 
+    mutate(groupe = "consommé") |> 
+    filter(montant > 0)
+  
+  previ <- repartition()
+  if (!is.null(previ)) {
+    previ <- previ |> 
+      mutate(
+        nature = type,
+        groupe = "prévisionnel",
+        type = "prévisionnel"
+      )
+    conso <- bind_rows(conso, previ)
+  }
+  
+  tot <- conso |> 
+    dplyr::group_by(groupe, type) |> 
+    dplyr::summarise(montant = sum(montant)) |> 
+    dplyr::mutate(annee = "TOTAL")
+  
+  conso <- conso |> 
+    mutate(annee = as.character(annee)) |> 
+    bind_rows(tot)
+  
+  conso$groupe <- factor(conso$groupe, levels = c("prévisionnel", "consommé"))
+  conso$type <- factor(
+    conso$type,
+    levels = c("prévisionnel", "bloque", "reserve", "engage", "paye"),
+    labels = c("prévisionnel", "bloqué", "reservé", "engagé (non payé)", "payé")
+  )
+  
+  ggplot(conso) +
+    aes(x = groupe, fill = type, weight = montant) +
+    geom_bar(position = "stack") +
+    facet_grid(cols = vars(annee), switch = "both") +
+    labs(x = NULL, y = NULL, fill = NULL) +
+    scale_fill_manual(
+      values = c("#008CBA", "#999999", "#DDCC77", "#EE99AA", "#BB5566"),
+      drop = FALSE
+    ) +
+    scale_y_continuous(label = label_euro) +
+    theme_classic(base_size = 12) +
+    theme(
+      panel.grid.major.x = element_blank(),
+      strip.placement = "outside",
+      strip.text = element_text(face = "bold")
+    )
+})
+
+tableau_consommation_annuelle <- reactive({
+  conso <- consommation_annuelle()
+  if (is.null(conso)) return(NULL)
+  
+  tbl <- conso |> 
+    group_by(nature, annee) |> 
+    summarise(consomme = sum(consomme, na.rm = TRUE)) |> 
+    tidyr::pivot_wider(
+      names_from = annee,
+      values_from = consomme,
+      values_fill = 0
+    ) |> 
+    mutate(
+      `Total consommé` = sum(c_across(where(is.numeric)))
+    )
+  
+  previ <- repartition()
+  if (!is.null(previ)) {
+    totaux_prevus <- previ |> 
+      mutate(nature = type) |> 
+      group_by(nature) |> 
+      summarise(`Prévisionnel` = sum(montant))
+    tbl <- tbl |>
+      full_join(totaux_prevus, by = "nature") |> 
+      mutate(across(where(is.numeric), ~ replace_na(., 0))      )
+  }
+  
+  somme <- tbl |> 
+    ungroup() |> 
+    summarise(across(where(is.numeric), sum)) |> 
+    mutate(nature = "TOTAL")
+  
+  tbl <- bind_rows(tbl, somme)
+  
+  if (!is.null(previ))
+    tbl <- tbl |> 
+      mutate(
+        `Part consommée` = (`Total consommé` / `Prévisionnel`) |>
+          scales::percent(accuracy = .1, decimal.mark = ","),
+        `Disponible` = `Prévisionnel` - `Total consommé`
+      )
+  
+  tbl |> 
+    rename(`Nature des dépenses` = nature) |> 
+    mutate(across(where(is.numeric), label_euro))
+})
+
+# Nom exportation du rapport ----------
+
+nom_rapport <- reactive({
+  projet <- metas()$nom
+  if (is.null(projet)) {
+    return(paste0(
+      "tableau_de_bord_budgetaire_v", lubridate::today(), ".pdf"
+    ))
+  } else {
+    projet <- projet |> 
+      stringi::stri_trans_general("Latin-ASCII") |> 
+      make.names() |> 
+      stringr::str_replace_all(fixed("."), "_")
+    return(paste0(
+      "tableau_de_bord_budgetaire_", projet, "_v", lubridate::today(), ".pdf"
+    ))
+  }
+})
+
+## Consommation MAP par eOPT & CFI ---------------------
+
+calcul_consommation_map <- function(map) {
+  map |> 
+    group_by(`eOTP : Code`, `CF - Code`, `Nature de dépenses`, Exercice) |> 
+    summarise(
+      `Solde réservations` = sum(`Solde réservations`),
+      `Engagé (AE consommés)` = sum(`AE consommés`),
+      `Liquidé (Liquidés EJ année N + antérieurs)` = sum(`Liquidé`),
+      `Payé (CP consommés)` = sum(`CP consommés`),
+      `Blocage de fond` = sum(`Blocage de fond`)
+    ) |> 
+    rename(
+      eOTP = `eOTP : Code`,
+      CFI = `CF - Code`
+    ) |> 
+    ungroup() |> 
+    arrange(Exercice) |> 
+    mutate(
+      Exercice = as.character(Exercice),
+      `Montant total` = `Solde réservations` + `Engagé (AE consommés)`
+    ) |> 
+    relocate(`Montant total`, .after = Exercice)
+}
+
+consommation_map <- reactive({
+  map <- depenses_map_brutes()
+  if (is.null(map)) return(NULL)
+  map |>  calcul_consommation_map()
+})
+
+synthese_map <- reactive({
+  map <- depenses_map_brutes()
+  if (is.null(map)) return(NULL)
+  
+  res <- map |> 
+    group_by(type_depense, id, `eOTP : Code`, `CF - Code`, `Nature de dépenses`, Exercice) |> 
+    summarise(
+      `Solde réservations` = sum(`Solde réservations`),
+      `Engagé (AE consommés)` = sum(`AE consommés`),
+      `Liquidé (Liquidés EJ année N + antérieurs)` = sum(`Liquidé`),
+      `Payé (CP consommés)` = sum(`CP consommés`),
+      `Blocage de fond` = sum(`Blocage de fond`)
+    ) |> 
+    left_join(
+      depenses_map() |> select(id, description),
+      by = "id"
+    ) |> 
+    relocate(description, .after = id) |> 
+    rename(
+      `Type de Dépense` = type_depense,
+      `Référence` = id,
+      `Description` = description,
+      eOTP = `eOTP : Code`,
+      CFI = `CF - Code`
+    ) |> 
+    mutate(
+      `Type de Dépense` = factor(`Type de Dépense`, levels = c("deplacement", "commande", "facture", "autre")),
+      Exercice = as.character(as.integer(Exercice)),
+      `Montant total` = `Solde réservations` + `Engagé (AE consommés)`
+    ) |> 
+    relocate(`Montant total`, .after = Exercice) |> 
+    arrange(`Type de Dépense`, `Référence`, Exercice, eOTP)
+})
+
+# Ventilation budgétaire ------
+
+import_config_ventilation <- reactive({
+  tbl_vide <- tibble(
+    id_ventilation = rep(NA_character_, 5),
+    rubrique = rep(NA_character_, 5),
+    groupe = rep(NA_character_, 5),
+    previsionnel = rep(NA_real_, 5),
+    notes = rep(NA_character_, 5)
+  )
+  if (is.null(input$ventilation_fichier)) return(tbl_vide)
+  
+  res <- tryCatch(
+    readxl::read_excel(
+      input$ventilation_fichier$datapath,
+      sheet = "configuration"
+    ),
+    error = function(e) {NULL}
+  )
+  
+  if (is.null(res)) return(tbl_vide)
+  
+  if (!all(c("id_ventilation", "rubrique", "groupe", "previsionnel", "notes") %in% names(res)))
+    return(tbl_vide)
+  
+  res |> 
+    mutate(previsionnel = as.numeric(previsionnel))
+})
+
+nom_export_ventilation <- reactive({
+  projet <- metas()[["nom"]]
+  if (is.null(projet)) {
+    return(paste0(
+      "ventilation_budgetaire.xlsx"
+    ))
+  } else {
+    projet <- projet |> 
+      stringi::stri_trans_general("Latin-ASCII") |> 
+      make.names() |> 
+      stringr::str_replace_all(fixed("."), "_")
+    return(paste0(
+      "ventilation_budgetaire_", projet, ".xlsx"
+    ))
+  }
+})
+
+import_ventilation <- reactive({
+  tbl_vide <- tibble(
+    id_ventilation = NA_character_,
+    id_depense = NA_character_,
+    notes = NA_character_
+  )
+  if (is.null(input$ventilation_fichier)) return(tbl_vide)
+  ventilation <- tryCatch(
+    readxl::read_excel(
+      input$ventilation_fichier$datapath,
+      sheet = "ventilation"
+    ),
+    error = function(e) {NULL}
+  )
+  if (is.null(ventilation)) return(tbl_vide)
+  if (!all(c("id_ventilation", "id_depense", "notes") %in% names(ventilation)))
+    return((tbl_vide))
+  ventilation
+})
+```
+
+
+# Sidebar {.sidebar}
+
+### `r renderText(metas()$nom)`
+
+**Métadonnées du Projet**
+
+```{r}
+renderUI({
+  res <- NULL
+  if (is.null(input$metadonnees_fichier)) {
+    res <- c(
+      "<p><strong style='color: red;'>",
+      "Veuillez charger le fichier Excel des métadonnées pour lancer le tableau de bord.",
+      "</strong></p>"
+    )
+  }
+  
+  HTML(res)
+})
+```
+
+```{r}
+renderUI({
+  res <- NULL
+  if (!is.null(input$metadonnees_fichier)) {
+    pb <- NULL
+    if (is.null(metas()))
+      pb <- c(pb, "metadonnees")
+    if (is.null(repartition()))
+      pb <- c(pb, "repartition")
+    if (is.null(personnel()))
+      pb <- c(pb, "personnel")
+    if (is.null(autres_depenses()))
+      pb <- c(pb, "autres_depenses")
+    
+    if (!is.null(pb)) {
+      res <- c(
+        "<p><strong style='color: red;'>",
+        "Le fichier chargé est incorrect. ",
+        "Certaines feuilles et/ou colonnes sont manquantes.</strong><br />",
+        "<em>Peut-être avez-vous chargé le mauvais fichier Excel&nbsp;?<br />",
+        "Liste des feuilles manquantes/problématiques&nbsp;: ",
+        paste(pb, collapse = ", "),
+        ".",
+        "</em></p>"
+      )
+    }
+  }
+  
+  HTML(res)
+})
+```
+
+```{r}
+fileInput(
+  "metadonnees_fichier",
+  "Fichier Excel des métadonnées",
+  accept = c(
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xlsx"
+  ),
+  buttonLabel = HTML("<i class='fa fa-upload'></i>"),
+  placeholder = "choisir un fichier"
+)
+```
+
+**Dépenses MAP (IRD)**
+
+```{r}
+renderUI({
+  res <- NULL
+  if (!is.null(metas()) && is.null(input$map_fichier)) {
+    res <- c(
+      "<p><em style='color: red; font-size: .9em;'>",
+      "Merci de vérifier si un fichier MAP doit être importé. ",
+      "Sinon, le calcul des dépenses sera incorrect.",
+      "</em></p>"
+    )
+  }
+  
+  HTML(res)
+})
+```
+
+```{r}
+renderUI({
+  res <- NULL
+  
+  # vérification colonnes obligatoires
+  if (!is.null(input$map_fichier) && is.null(depenses_map())) {
+    tmp <- readxl::read_excel(input$map_fichier$datapath)
+    m <- !(cols_map_requises %in% names(tmp))
+    manquantes <- cols_map_requises[m] |> paste(collapse = ", ")
+    
+    res <- c(
+      "<p><strong style='color: red;'>",
+      "Le fichier chargé est incorrect. Il manque des variables requises.</strong><br />",
+      "<em>Peut-être avez-vous chargé le mauvais fichier Excel&nbsp;?<br />",
+      "Liste des colonnes manquantes&nbsp;: ",
+      manquantes,
+      ".",
+      "</em></p>"
+    )
+  }
+    
+  # vérification colonnes optionnelles
+  if (!is.null(input$map_fichier) && !is.null(depenses_map())) {
+  tmp <- readxl::read_excel(input$map_fichier$datapath)
+  m <- !(cols_map_optionnelles_toutes %in% names(tmp))
+  manquantes <- cols_map_optionnelles_toutes[m] |> paste(collapse = ", ")
+  if (any(m))
+    res <- c(
+      "<p style='font-size: .9em;'><em>",
+      "Colonnes optionnelles manquantes&nbsp;: ",
+      manquantes,
+      ". Elles ne sont pas obligatoires mais améliorent la description des dépenses.",
+      "</em></p>"
+    )
+}
+
+  HTML(res)
+})
+```
+
+
+```{r}
+fileInput(
+  "map_fichier",
+  "Fichier Excel des dépenses exporté depuis MAP (optionnel)",
+  accept = c(
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xlsx"
+  ),
+  buttonLabel = HTML("<i class='fa fa-upload'></i>"),
+  placeholder = "choisir un fichier"
+)
+```
+
+**Ventilation budgétaire**
+
+```{r}
+renderUI({
+  res <- NULL
+  config <- import_config_ventilation()
+  if (!is.null(input$ventilation_fichier) && nrow(config) == 5 && all(is.na(config$id_ventilation)))
+    res <- c(
+      "<p><strong style='color: red;'>",
+      "Le fichier chargé est incorrect. Il manque des variables requises.</strong><br />",
+      "<em>Peut-être avez-vous chargé le mauvais fichier Excel&nbsp;?</em>",
+      "</p>"
+    )
+  
+  HTML(res)
+})
+```
+
+```{r}
+fileInput(
+  "ventilation_fichier",
+  "Fichier Excel de la ventilation budgétaire (optionnel)",
+  accept = c(
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xlsx"
+  ),
+  buttonLabel = HTML("<i class='fa fa-upload'></i>"),
+  placeholder = "choisir un fichier"
+)
+```
+
+```{r}
+renderUI({
+  if(is.null(input$metadonnees_fichier)) return(NULL)
+    HTML("<p><strong>Rapport synthétique</strong></p>")
+})
+```
+
+
+```{r}
+renderUI({
+  if(is.null(input$metadonnees_fichier)) return(NULL)
+    downloadButton("rapport", "Exporter en PDF", class = "btn-primary")
+})
+
+output$rapport <- downloadHandler(
+      filename = nom_rapport(),
+      content = function(file) {
+        # Copy the report file to a temporary directory before processing it, in
+        # case we don't have write permissions to the current working dir (which
+        # can happen when deployed).
+        tempReport <- file.path(tempdir(), "rapport.Rmd")
+        file.copy("rapport.Rmd", tempReport, overwrite = TRUE)
+
+        # Set up parameters to pass to Rmd document
+        params <- list(
+          nom =  metas()$nom,
+          metas = metas(),
+          budget_total_hors_fg = budget_total_hors_fg(),
+          total_reserve = total_reserve(),
+          total_engage = total_engage(),
+          total_paye = total_paye(),
+          total_bloque = total_bloque(),
+          total_disponible = total_disponible(),
+          tableau_repartition = tableau_repartition(),
+          depenses = depenses(),
+          plot_conso_annuelle = plot_conso_annuelle(),
+          tableau_consommation_annuelle = tableau_consommation_annuelle(),
+          tableau_personnel = tableau_personnel()
+        )
+
+        # Knit the document, passing in the `params` list, and eval it in a
+        # child of the global environment (this isolates the code in the document
+        # from the code in this app).
+        rmarkdown::render(tempReport, output_file = file,
+          params = params,
+          envir = new.env(parent = globalenv())
+        )
+      }
+    )
+```
+
+<a href="./" class="btn btn-default" id="reset"><i class="fa fa-trash"></i> Réinitialiser</a>
+
+# Vue d'ensemble {#accueil data-icon="fa-clipboard" data-orientation=rows}
+
+## Nom du projet {data-height=10}
+
+```{r}
+renderUI({
+  res <- NULL
+  nom <- metas()$nom
+  if (!is.null(nom))
+    res <- paste("<h1>", nom, "</h1>")
+  HTML(res)
+})
+```
+
+## Budget
+
+### Budget total (hors frais de gestion)
+
+```{r}
+renderValueBox(
+  valueBox(
+    budget_total_hors_fg() |> label_euro() %||% "-",
+    icon = "fa-euro"
+  )
+)
+```
+
+### Consommation du budget
+
+```{r}
+renderValueBox({
+  prop <- proportion_consomme()
+  color <- case_when(
+    is.null(prop) ~ "#AAAAAA",
+    !is.null(prop) && prop < .5 ~ "#44AA99",
+    !is.null(prop) && prop < .85 ~ "#DDCC77",
+    !is.null(prop) && prop < 1 ~ "#EE99AA",
+    TRUE ~ "#BB5566"
+  )
+  if (is.null(prop)) {
+    value <- "-"
+  } else {
+    consomme <- budget_total_hors_fg() - total_disponible()
+    value <- paste(
+      consomme |> label_euro(),
+      "(" %p% (prop |> scales::percent(accuracy = .1)) %p% ")"
+    )
+  }
+  valueBox(
+    value,
+    icon = "fa-percent",
+    color = color
+  )
+})
+```
+
+
+## Consommation du budget
+
+### Réservé
+
+```{r}
+renderValueBox(
+  valueBox(
+    total_reserve() |> label_euro() %||% "-",
+    icon = "fa-question",
+    color = "#DDCC77"
+  )
+)
+```
+
+### Engagé (non payé)
+
+```{r}
+renderValueBox(
+  valueBox(
+    total_engage() |> label_euro() %||% "-",
+    icon = "fa-file-signature",
+    color = "#EE99AA"
+  )
+)
+```
+
+### Payé
+
+```{r}
+renderValueBox(
+  valueBox(
+    total_paye() |> label_euro() %||% "-",
+    icon = "fa-money-bill",
+    color = "#BB5566"
+  )
+)
+```
+
+### Bloqué
+
+```{r}
+renderValueBox(
+  valueBox(
+    total_bloque() |> label_euro() %||% "-",
+    icon = "fa-ban",
+    color = "#DDDDDD"
+  )
+)
+```
+
+### Disponible
+
+```{r}
+renderValueBox(
+  valueBox(
+    total_disponible() |> label_euro() %||% "-",
+    icon = "fa-wallet",
+    color = "#44AA99"
+  )
+)
+```
+
+
+
+## Métadonnées 
+
+### Informations générales
+
+```{r}
+renderUI({
+  if (is.null(metas()))
+    return(NULL)
+  
+  res <- "<p>"
+  
+  format_meta <- function(meta, libelle, date = FALSE) {
+    meta <- metas()[[meta]]
+    if (is.null(meta)) return("")
+    if (date) meta <- format(meta, format = "%d %B %Y")
+    one <- paste0(
+      "<strong>",
+      libelle,
+      "&nbsp;:</strong> ",
+      meta,
+      "<br />"
+    )
+    res <<- c(res, one)
+  }
+  format_meta("porteur", "Porteur")
+  format_meta("charge_projet", "Chargé·e de projet")
+  format_meta("bailleur", "Bailleur / Financeur")
+  format_meta("gestionnaire", "Organisme gestionnaire")
+  format_meta("eotp", "eOTP(s)")
+  format_meta("contrat", "Numéro de contrat")
+  format_meta("debut", "Début", date = TRUE)
+  format_meta("fin", "Fin", date = TRUE)
+  
+  fg <- metas()$frais_gestion
+  budget <- budget_total_hors_fg()
+  res <- c(res, paste0(
+    "<strong>Budget Total&nbsp;:</strong> ",
+    (budget + fg) |> label_euro(),
+    "<br />"
+  ))
+  
+  res <- c(res, paste0(
+    "<strong>Frais de gestion&nbsp;:</strong> ",
+    fg |> label_euro(),
+    " <span style='font_size: .8em;'>(",
+    (fg / budget) |> scales::percent(accuracy = .1, decimal.mark = ","),
+    " du total hors FG&nbsp;; ",
+    (fg / (budget + fg)) |> scales::percent(accuracy = .1, decimal.mark = ","),
+    " du total)</span>",
+    "<br />"
+  ))
+
+  res <- c(res, "</p>")
+  
+  HTML(res)
+})
+```
+
+### Répartition budgétaire prévisionnelle (hors frais de gestion)
+
+```{r}
+renderTable(
+  tableau_repartition(),
+  bordered = TRUE,
+  striped = TRUE,
+  hover = TRUE,
+  na = "",
+  align = "r"
+)
+```
+
+# Consommation par année {#conso-annuelle data-icon="fa-chart-simple" data-orientation=rows}
+
+## Graphique
+
+### Consommation annuelle
+
+```{r}
+renderPlotly({
+  p <- plot_conso_annuelle()
+  if (is.null(p)) return(p)
+  ggplotly(p)
+})
+```
+
+## Tableau {data-height=200}
+
+### Synthèse
+
+```{r}
+renderTable(
+  tableau_consommation_annuelle(),
+  bordered = TRUE,
+  striped = TRUE,
+  hover = TRUE,
+  na = "",
+  align = "r"
+)
+```
+
+# Prévisionnel RH {#rh data-icon="fa-user" data-orientation=rows}
+
+```{r}
+renderTable(
+  tableau_personnel(),
+  bordered = TRUE,
+  striped = TRUE,
+  hover = TRUE,
+  na = "",
+  align = "llrrrl"
+)
+```
+
+# Détail des Dépenses {#depenses data-icon="fa-euro" data-orientation=rows}
+
+## Explications {data-height=10}
+
+```{r}
+renderUI({
+  if (is.null(depenses())) {
+    res <- "<p /><p><em>Aucune dépense enregistrée.</em></p>"
+  } else {
+    res <- c(
+        "<p><strong>Explications&nbsp;:</strong></p>",
+        "<ul>",
+        "<li><em>Total&nbsp;:</em> égal à la somme de 'Réservé' + 'Engagé' + 'Payé' + 'Bloqué'.</li>",
+        "<li><em>Réservé&nbsp;:</em> Réservation de crédits (typiquement pour des frais de missions à régler ultérieurement ou pour des salaires).</li>",
+        "<li><em>Engagé (non payé)&nbsp;:</em> Engagement de crédits qui ne sont pas encore payés (par exemple dans le cas d'une commande non livrée). Techniquement correspond aux AE consommés moins les CP consommés moins les blocages de fonds.</li>",
+        "<li><em>Payé&nbsp;:</em> la somme a été payé au fournisseur/bénéficiaire. Correspond aux CP consommés.</li>",
+        "<li><em>Bloqué&nbsp;:</em> blocage de fonds, qui peut arriver notamment lors de missions en fin d'année. Cette somme n'a pas été payée mais ne peut plus être engagée. Il faut contacter les services financiers pour demander un débloquage.</li>",
+        "</ul>"
+      )
+    if (!is.null(input$map_fichier)) {
+      res <- c(
+        res,
+        "<p>Certaines dépenses présentées ici sont extraites de l'outil MAP de l'IRD. Leur présentation est ici simplifiée&nbsp;: pour les dépenses multi-années (par exemple pour une mission ou une commande en fin d'année), l'engagement et le paiement des dépenses peut être réalisés sur des exercices différents. Ici, nous avons tout regroupé sur l'année où la dépense a été initialement engagée.</p>",
+        "<p>Pour une présentation plus détaillée des dépenses issues de MAP, vous pouvez vous référer à l'onglet dédié.</p>"
+      )
+    }
+  }
+  
+  HTML(res)
+})
+```
+
+## Tableau
+
+
+```{r}
+renderDataTable({
+  tbl <- depenses()
+  if (is.null(tbl)) return(NULL)
+  tbl <- tbl |> 
+    rename(
+      `Nature de la dépense` = nature,
+      `Année` = annee,
+      `Identifiant` = id,
+      `Description` = description,
+      `Total` = montant,
+      `Réservé` = reserve,
+      `Engagé (non payé)` = engage,
+      `Payé` = paye,
+      `Bloqué` = bloque
+    )
+  
+  datatable(
+    tbl,
+    options = list(
+      scrollX = TRUE,
+      scrollY = TRUE,
+      autowidth = TRUE,
+      pageLength = 100000, 
+      dom = 'Bfrtip',
+      buttons = c('csv', 'excel', 'pdf', 'print')
+    ),
+    rownames = FALSE,
+    extensions = 'Buttons'
+  ) |> 
+    formatRound(columns = 3:7, mark = "") |> 
+    formatStyle(columns = c(1, 3), fontWeight = "bold")
+})
+```
+
+# Configuration de la ventilation {#config-ventilation data-navmenu="Ventilation budgétaire" data-navmenu-icon="fa-folder-tree"}
+
+### Instructions & Export
+
+<div style="font-size: .9em;">
+
+**Important :** afin de ne pas perdre votre saisie, cliquez sur le **bouton d'exportation**. Le fichier Excel généré peut-être être re-importé dans la colonne de gauche.<br />
+<strong style="color:red;">Attention :</strong> tout import d'un fichier de ventilation effacera les modifications non sauvegardées.<br />
+**Pour ajouter/supprimer une ligne&nbsp;:** utilisez le clic-droit de la souris.
+
+- **id_ventilation :** identifiant de la rubrique de ventilation. Cet élément est **obligatoire** et ne peut être vide. Privilégiez un nom court, sans accent. En cas de modification, les dépenses précédemment associées à cette rubrique de ventilation devront être ré-associées.
+- **rubrique :** nom de la rubrique de ventilation, telle qu'elle apparaîtra dans les rapports.
+- **groupe :** (optionnel) les rubriques de ventilation peuvent être regroupées en groupes. Des sous-totaux seront également calculés par groupe.
+- **previsionnel :** montant prévisionnel dédié à cette rubrique de ventilation (en Euros). **Attention :** la saisie ne peut être que numérique et le point doit être utilisé pour saisir des centimes.
+- **notes :** (optionnel) champ textuel libre.
+
+</div>
+
+```{r}
+renderUI({
+  res <- c("<p />")
+  total_hors_fg <- budget_total_hors_fg()
+  if (!is.null(total_hors_fg)) {
+    ventile <- saisie_config_ventilation() |> 
+      pull(previsionnel) |> 
+      sum(na.rm = TRUE)
+    previ_non_ventile <- total_hors_fg - ventile
+    res <- c(
+      res,
+      "<p>Budget prévisionnel non ventilé&nbsp;: ",
+      label_euro(previ_non_ventile),
+      "<p>"
+    )
+  }
+  
+  n_ids_manquants <- saisie_config_ventilation() |> 
+    filter(is.na(id_ventilation) & (!is.na(rubrique) | !is.na(previsionnel))) |> 
+    nrow()
+  if (n_ids_manquants > 0) {
+    res <- c(
+      res,
+      "<p style='color: red; font-weight: bold;'>ATTENTION&nbsp;:",
+      n_ids_manquants,
+      " identifiant(s) manquant(s)&nbsp;!</p>"
+    )
+  }
+  
+  duplicated_id <- saisie_config_ventilation() |> 
+    filter(!is.na(id_ventilation)) |> 
+    pull(id_ventilation)
+  duplicated_id <- duplicated_id[duplicated(duplicated_id)] |> unique()
+  if (length(duplicated_id) > 0) {
+    res <- c(
+      res,
+      "<p style='color: red; font-weight: bold;'>ATTENTION&nbsp;: les identifiants '",
+      paste(duplicated_id, collapse = ", "),
+      "' sont en double&nbsp;!</p>"
+    )
+  }
+  
+  list(
+    downloadButton("export_ventilation", "Exporter/Sauvegarder la ventilation budgétaire au format Excel", class = "btn-primary"),
+    HTML(res)
+  )
+})
+
+export_ventilation <- reactive({
+  configuration <- config_ventilation()
+  ventilation_depenses <- ventilation()
+  
+  if (is.null(ventilation_depenses))
+    return(list(configuration = configuration))
+  
+  list(
+    configuration = configuration,
+    ventilation = ventilation_depenses
+  )
+})
+
+output$export_ventilation <- downloadHandler(
+  filename = nom_export_ventilation(),
+  content = function(file) {
+    writexl::write_xlsx(
+      export_ventilation(),
+      path = file
+    )
+  }
+)
+
+output$export_ventilation2 <- downloadHandler(
+  filename = nom_export_ventilation(),
+  content = function(file) {
+    writexl::write_xlsx(
+      export_ventilation(),
+      path = file
+    )
+  }
+)
+```
+
+### Saisie de la configuration des rubiques de ventilation
+
+```{r}
+renderUI({
+  dataEditUI("edit_config_ventilation")
+})
+
+saisie_config_ventilation <- dataEditServer(
+  "edit_config_ventilation",
+  data = import_config_ventilation,
+  col_edit = FALSE,
+  col_names = FALSE
+)
+
+config_ventilation <- reactive({
+  saisie_config_ventilation() |> 
+    filter(!is.na(id_ventilation)) |> 
+    mutate(previsionnel = round(previsionnel, digits = 2)) |> 
+    distinct(id_ventilation, .keep_all = TRUE) |> 
+    arrange(groupe)
+})
+```
+
+# Ventilation des dépenses {data-navmenu="Ventilation budgétaire"}
+
+### Instructions & Export {data-height=150}
+
+<div style="font-size: .9em;">
+
+**Important :** afin de ne pas perdre votre saisie, cliquez sur le **bouton d'exportation**. Le fichier Excel généré peut-être être re-importé dans la colonne de gauche.<br />
+<strong style="color:red;">Attention :</strong> tout import d'un fichier de ventilation ou modification de la configuration effacera les modifications non sauvegardées de la ventilation des dépenses.
+
+</div>
+
+```{r}
+renderUI({
+  res <- c("<p />")
+  list(
+    downloadButton("export_ventilation2", "Exporter/Sauvegarder la ventilation budgétaire au format Excel", class = "btn-primary"),
+    HTML(res)
+  )
+})
+```
+
+### Saisie de la ventilation budgétaire
+
+```{r}
+noms_ventilation <- function(id_ventilation, rubrique, groupe) {
+  res <- "[" %p% id_ventilation %p% "] " %p% rubrique
+  # ng <- is.na(groupe)
+  # res[ng] <- "[" %p% id_ventilation[ng] %p% "] " %p% rubrique[ng]
+  res[is.na(id_ventilation)] <- NA_character_
+  res
+}
+
+liste_ventilations <- reactive({
+  if (nrow(config_ventilation()) == 0) return(c("a", "b"))
+  l <- config_ventilation() |> 
+    mutate(
+      ventilation = noms_ventilation(id_ventilation, rubrique, groupe)
+    ) |> 
+    pull(ventilation)
+  c("", l)
+})
+
+import_ventilation_depenses <- reactive({
+  if (is.null(depenses())) return(NULL)
+  if (nrow(config_ventilation()) == 0) return(NULL)
+  
+  depenses() |> 
+    rename(id_depense = id) |>
+    select(id_depense, annee, description, montant) |> 
+  left_join(import_ventilation(), by = "id_depense") |> 
+  left_join(
+    config_ventilation() |> select(id_ventilation, rubrique, groupe),
+    by = "id_ventilation"
+  ) |> 
+  mutate(
+    ventilation = noms_ventilation(id_ventilation, rubrique, groupe)
+  ) |> 
+  select(-id_ventilation, -groupe, -rubrique)
+})
+
+renderUI({
+  dep <- import_ventilation_depenses()
+  if (is.null(dep)) return(NULL)
+  
+  "%add%" <- function(x, y) {append(x, list(y))}
+  
+  tbl <- dep |> 
+    mutate(
+      select = map2(
+        id_depense,
+        ventilation,
+        ~ selectInput(
+          inputId = "ventilation_" %p% .x,
+          label = NULL,
+          choices = liste_ventilations(),
+          selected = .y,
+          width = "100%"
+        )
+      ),
+      input_notes = map2(
+        id_depense,
+        notes,
+        ~ textInput(
+          inputId = "notes_ventilation_" %p% .x,
+          label = NULL,
+          value = .y,
+          width = "100%"
+        )
+      )
+    )
+
+  res <- list(HTML(
+    "<table class='table table-striped table-hover table-bordered spacing-s' width='100%'><thead><tr>",
+    "<th>Identifiant</th>",
+    "<th>Année</th>",
+    "<th>Description</th>",
+    "<th>Montant</th>",
+    "<th>Rubrique de ventilation</th>",
+    "<th>Notes libres</th>",
+    "</tr></thead><tbody>"
+  ))
+  
+  for (i in 1:nrow(tbl)) {
+    res <- res %add%
+      HTML("<tr>") %add%
+      HTML(paste0("<td><em>", tbl$id_depense[i], "</em></td>")) %add%
+      HTML(paste0("<td><strong>", tbl$annee[i], "</strong></td>")) %add%
+      HTML(paste0("<td style='max-width: 400px;'>", tbl$description[i], "</td>")) %add%
+      HTML(paste0("<td style='text-align: right;'><strong>", label_euro_bis(tbl$montant[i]), "</strong></td>")) %add%
+      HTML("<td>") %add%
+      tbl$select[i] %add%
+      HTML("</td>") %add%
+      HTML("<td style='min-width: 400px;'>") %add%
+      tbl$input_notes[i] %add%
+      HTML("</td>") %add%
+      HTML("</tr>")
+  }
+  
+  res <- res %add% HTML("</tbody></table>")
+  res
+})
+
+ventilation <- reactive({
+  if (is.null(depenses())) return(NULL)
+  if (nrow(config_ventilation()) == 0) return(NULL)
+  
+  ventilation <- depenses() |> 
+    rename(id_depense = id) |>
+    select(id_depense) |> 
+    mutate(
+      id_ventilation = NA_character_,
+      notes = NA_character_
+    )
+  
+  for (i in 1:nrow(ventilation)) {
+    ventilation$id_ventilation[i] <- input[["ventilation_" %p% ventilation$id_depense[i]]] %||% ""
+    ventilation$notes[i] <- input[["notes_ventilation_" %p% ventilation$id_depense[i]]] %||% ""
+  }
+  
+  # gérer le cas où les champs de ventilation n'ont pas encore été initialisés
+  if (all(ventilation$id_ventilation == "")) {
+    ventilation <- import_ventilation_depenses() |> 
+      select(id_depense, id_ventilation = ventilation, notes)
+  }
+  
+  ventilation |> 
+    mutate(
+      id_ventilation = id_ventilation |> str_extract("\\[(.+)\\]", group = 1)
+    ) |> 
+    replace_na(list(id_ventilation = "", notes = ""))
+  
+})
+
+```
+
+
+# Consommation par rubrique de ventilation {data-navmenu="Ventilation budgétaire" data-orientation=cols}
+
+### Consommation annuelle par rubrique de ventilation
+
+```{r}
+depenses_ventilees <- reactive({
+  dep <- depenses()
+  if (is.null(dep)) return(NULL)
+  
+  vent <- ventilation()
+  if (is.null(vent)) return(NULL)
+  
+  dep <- dep |> 
+    left_join(
+      vent |> select(id = id_depense, id_ventilation),
+      by = "id"
+    )
+  
+  config <- config_ventilation()
+  dep$id_ventilation <- factor(dep$id_ventilation, levels = unique(config$id_ventilation))
+  
+  dep
+})
+
+consommation_ventilation <- reactive({
+  dep <- depenses_ventilees()
+  if (is.null(dep)) return(NULL)
+  
+  dep |>
+    group_by(annee, id_ventilation) |>
+    summarise(
+      reserve = sum(reserve),
+      engage = sum(engage),
+      paye = sum(paye),
+      bloque = sum(bloque),
+      consomme = sum(montant)
+    )
+})
+
+plot_conso_ventilation <- reactive({
+  conso <- consommation_ventilation()
+  if (is.null(conso)) return(NULL)
+  conso <- conso |>
+    select(-consomme) |>
+    pivot_longer(
+      cols = -c(annee, id_ventilation),
+      names_to = "type",
+      values_to = "montant"
+    ) |>
+    mutate(groupe = "consommé") |>
+    filter(montant > 0)
+  
+  config <- config_ventilation()
+  if (is.null(config)) return(NULL)
+  
+  previ <- config |> 
+    mutate(
+      montant = previsionnel,
+      groupe = "prévisionnel",
+      type = "prévisionnel"
+    ) |> 
+    select(id_ventilation, montant, groupe, type)
+  
+  conso <- bind_rows(conso, previ) |> 
+    left_join(
+      config |> select(id_ventilation, groupe_ventilation = groupe, rubrique),
+      by = "id_ventilation"
+    ) |> 
+    arrange(groupe_ventilation, rubrique) |> 
+    replace_na(list(groupe_ventilation = "Non groupées", rubrique = "Non ventilées"))
+ 
+  conso$rubrique <- fct_inorder(conso$rubrique)
+  conso$groupe <- factor(conso$groupe, levels = c("prévisionnel", "consommé"))
+  conso$type <- factor(
+    conso$type,
+    levels = c("prévisionnel", "bloque", "reserve", "engage", "paye"),
+    labels = c("prévisionnel", "bloqué", "reservé", "engagé (non payé)", "payé")
+  )
+  ggplot(conso) +
+    aes(y = groupe, fill = type, weight = montant) +
+    geom_bar(position = "stack") +
+    facet_grid(rows = vars(rubrique), switch = "y", drop = FALSE) +
+    labs(x = NULL, y = NULL, fill = NULL) +
+    scale_fill_manual(
+      values = c("#008CBA", "#999999", "#DDCC77", "#EE99AA", "#BB5566"),
+      drop = FALSE
+    ) +
+    scale_x_continuous(label = label_euro) +
+    theme_classic(base_size = 12) +
+    theme(
+      panel.grid.major.x = element_blank(),
+      strip.placement = "outside",
+      strip.text.y.left = element_text(face = "bold", angle = 0)
+    )
+})
+
+renderPlot({
+  p <- plot_conso_ventilation()
+    if (is.null(p)) return(p)
+  p
+})
+```
+
+### Tableau de synthèse
+
+```{r}
+tableau_consommation_ventilation <- reactive({
+  conso <- consommation_ventilation()
+  if (is.null(conso)) return(NULL)
+  
+  config <- config_ventilation()
+  if (is.null(config)) return(NULL)
+  
+  tbl <- conso |>
+    group_by(id_ventilation, annee, .drop = FALSE) |>
+    summarise(consomme = sum(consomme, na.rm = TRUE)) |>
+    tidyr::pivot_wider(
+      names_from = annee,
+      values_from = consomme,
+      values_fill = 0
+    ) |>
+    mutate(
+      `Total consommé` = sum(c_across(where(is.numeric)))
+    ) |> 
+    left_join(
+      config |> select(id_ventilation, rubrique, groupe, previsionnel),
+      by = "id_ventilation"
+    ) |> 
+    rename(`Prévisionnel` = previsionnel) |> 
+    relocate(groupe, rubrique) |> 
+    select(-id_ventilation) |> 
+    mutate(type_rubrique = TRUE)
+  
+  tbl_groupe <- tbl |> 
+    group_by(groupe) |> 
+    summarise(across(where(is.numeric), ~ sum(.x, na.rm = TRUE))) |> 
+    mutate(
+      rubrique = if_else(is.na(groupe), NA_character_, ("<strong class='groupe_ventilation'>" %p% str_to_upper(groupe)) %p% "</strong>"),
+      type_rubrique = FALSE
+    )
+  
+  tbl <- bind_rows(tbl, tbl_groupe) |> 
+    arrange(groupe, type_rubrique, rubrique) |> 
+    mutate(
+      rubrique = case_when(
+        is.na(rubrique) & !type_rubrique ~ "<strong class='groupe_ventilation'>NON GROUPÉES</strong>",
+        is.na(rubrique) & type_rubrique ~ "Non ventilées",
+        TRUE ~ rubrique
+      )
+    ) |> 
+    ungroup() |> 
+    select(-id_ventilation, -groupe, -type_rubrique)
+  
+  tbl |> 
+    mutate(
+      `Part consommée` = scales::percent(
+        (`Prévisionnel` - `Total consommé`) / `Prévisionnel`,
+        accuracy = .1
+      ),
+      Disponible = `Prévisionnel` - `Total consommé`
+    ) |> 
+    rename(`GROUPE / rubrique de ventilation` = rubrique)
+})
+
+renderTable(
+  tableau_consommation_ventilation(),
+  bordered = TRUE,
+  striped = TRUE,
+  hover = TRUE,
+  na = "",
+  digits = 2,
+  sanitize.text.function = function(x) x
+)
+```
+
+
+# Consommation par eOTP, CFI & Exercice {data-navmenu="Détails MAP" data-navmenu-icon="fa-table" data-orientation=rows}
+
+**Consommation par eOTP, CFI & Exercice (restreinte aux données issues de MAP IRD)**
+
+```{r}
+renderDataTable({
+  tbl <- consommation_map()
+  if (is.null(tbl)) return(NULL)
+  datatable(
+    tbl,
+    options = list(
+      scrollX = TRUE,
+      scrollY = TRUE,
+      autowidth = TRUE,
+      pageLength = 100000, 
+      dom = 'Bfrtip',
+      buttons = c('csv', 'excel', 'pdf', 'print')
+    ),
+    rownames = FALSE,
+    extensions = 'Buttons'
+  ) |> 
+    formatRound(columns = 5:10, mark = "") |> 
+    formatStyle(columns = c(1, 2, 4, 5), fontWeight = "bold")
+})
+```
+
+# Synthèse par déplacement / commande {data-navmenu="Détails MAP" data-orientation=rows}
+
+**Synthèse par déplacement / commande, eOTP, CFI & Exercice (restreinte aux données issues de MAP IRD)**
+
+```{r}
+renderDataTable({
+  tbl <- synthese_map()
+  if (is.null(tbl)) return(NULL)
+  datatable(
+    tbl,
+    options = list(
+      scrollX = TRUE,
+      scrollY = TRUE,
+      autowidth = TRUE,
+      pageLength = 100000, 
+      dom = 'Bfrtip',
+      buttons = c('csv', 'excel', 'pdf', 'print')
+    ),
+    rownames = FALSE,
+    extensions = 'Buttons'
+  ) |> 
+    formatRound(columns = 8:13, mark = "") |> 
+    formatStyle(columns = c(2,8), fontWeight = "bold")
+})
+```
+
+# Détails déplacements / commandes {#details-map data-navmenu="Détails MAP"}
+
+**Détails des déplacements / commandes (données issues de MAP IRD uniquement)**
+
+```{r}
+renderUI({
+  dep <- depenses_map()
+  if (is.null(dep)) return(NULL)
+  
+  details <- depenses_map_brutes() |> 
+    select(-starts_with("e_")) |> 
+    select(
+      Exercice,
+      `eOTP : Code`,
+      `CF - Code`,
+      `Nature de dépenses`,
+      `Solde réservations`,
+      `AE consommés`,
+      `Liquidé EJ année N`,
+      `Liquidé EJ antérieurs`,
+      `CP consommés`,
+      everything()
+    )
+  details$type_depense <- factor(
+    details$type_depense,
+    levels = c("deplacement", "commande", "facture", "autre"),
+    labels = c("Déplacement", "Commande", "Facture", "Non identifiée")
+  )
+  res <- ""
+  
+  for (i in dep$id) {
+    res <- c(res, "<div class='une_depense'>")
+    details_one <- details |> filter(id == i)
+    dep_one <- dep |> filter(id == i)
+    type_depense <- details_one$type_depense[1]
+    reserve <- dep_one$reserve
+    engage <- dep_one$engage
+    paye <- dep_one$paye
+    bloque <- dep_one$bloque
+    montant_total <- reserve + engage + paye + bloque
+    statut <- case_when(
+      montant_total == paye ~ "<span style='color: green;'>totalement payé</span>",
+      bloque > 0 ~ "<span style='color: purple;'>certains fonds sont bloqués</span>",
+      reserve > 0 ~ "<span style='color: red;'>non totalement payé (avec réservation de crédits)</span>",
+      engage > 0 ~ "<span style='color: red;'>non totalement payé</span>"
+    )
+    
+    res <- c(
+      res, 
+      "<p><strong>" %p% type_depense %p% " n°" %p% str_sub(i, 6) %p% 
+        " · Montant total : " %p% label_euro(montant_total) %p% " · " %p% statut %p% "</strong><br />",
+      "<em>" %p% dep_one$description[1] %p% "</em><br />", 
+      label_euro_gras(reserve, "Réservé&nbsp;: ") %p% " · " %p% label_euro_gras(engage, "Engagé (non payé)&nbsp;: "),
+      " · " %p% label_euro_gras(paye, "Payé&nbsp;: ") %p% " · " %p% label_euro_gras(bloque, "Bloqué&nbsp;: "),
+      "</p>"
+    )
+    
+    tbl_conso <- details_one |> 
+      calcul_consommation_map() |> 
+      mutate(across(where(is.numeric), label_euro)) |> 
+      knitr::kable(format = "html", align = "lllcrrrrrr") %>%
+      kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+    res <- c(res, tbl_conso)
+    
+    tbl_details <- details_one |> 
+      knitr::kable(format = "html") %>%
+      kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+    res <- c(
+      res,
+      "<button onclick='$(\"#details_" %p% i %p% "\").toggle(\"fade\");' class='btn btn-secondary btn-sm'>afficher / masquer détails</button>",
+      "<div class='une_depense_details' id='details_" %p% i %p% "'>",
+      tbl_details,
+      "</div>"
+    )
+
+    res <- c(res, "</div>")
+  }
+  
+  
+  HTML(res)
+})
+```
+
+# Aide {data-icon="fa-circle-question"}
+
+Partie à rédiger
+
+**MAP colonnes obligatoires :**
+
+```{r, results='asis'}
+cat(paste("-", cols_map_requises, collapse = "\n"))
+```
+
+**MAP colonnes optionnelles :**
+
+```{r, results='asis'}
+cat(paste("-", cols_map_optionnelles_toutes, collapse = "\n"))
+```
