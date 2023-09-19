@@ -1416,6 +1416,7 @@ renderUI({
   format_meta("bailleur", "Bailleur / Financeur")
   format_meta("gestionnaire", "Organisme gestionnaire")
   format_meta("eotp", "eOTP(s)")
+  format_meta("cfi", "Centre financier (CFI)")
   format_meta("contrat", "Numéro de contrat")
   format_meta("debut", "Début", date = TRUE)
   format_meta("fin", "Fin", date = TRUE)
@@ -2118,10 +2119,13 @@ renderUI({
     bloque <- dep_one$bloque
     montant_total <- reserve + engage + paye + bloque
     statut <- case_when(
+      montant_total == 0 & paye > 0 ~ "<span style='color: #888;'>engagé sur un exercice précédent</span>",
+      engage < 0 ~ "<span style='color: #888;'>remboursement d'un engagement trop élévé sur un exercice précédent</span>",
       montant_total == paye ~ "<span style='color: green;'>totalement payé</span>",
       bloque > 0 ~ "<span style='color: purple;'>certains fonds sont bloqués</span>",
       reserve > 0 ~ "<span style='color: red;'>non totalement payé (avec réservation de crédits)</span>",
-      engage > 0 ~ "<span style='color: red;'>non totalement payé</span>"
+      engage > 0 ~ "<span style='color: red;'>non totalement payé</span>",
+      TRUE ~ ""
     )
     
     res <- c(
