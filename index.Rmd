@@ -19,7 +19,6 @@ library(shiny)
 library(shinyjs)
 library(kableExtra)
 library(DataEditR)
-library(datamods)
 
 options(scipen=999) # désactiver notation scientifique
 
@@ -364,13 +363,15 @@ map_verif_existance_commande <- function(data, cmde) {
     "-"
 }
 
-lecture_map <- function(fichier) {
+lecture_map <- function(fichier, nettoyage = TRUE) {
   if (is.null(fichier))
     return(NULL)
   
-  map <- readxl::read_excel(
-    fichier$datapath
-  ) |> 
+  map <- readxl::read_excel(fichier)
+  
+  if (!nettoyage) return(map)
+  
+  map <- map |> 
     slice(-1)
   
   if (!all(cols_map_requises %in% names(map)))
@@ -632,7 +633,26 @@ calcul_depenses_map <- function(map) {
     select(nature, annee, id, description, reserve, engage, paye, bloque)
 }
 
-depenses_map_brutes <- reactive(input$map_fichier |> lecture_map())
+depenses_map_brutes <- reactive({
+  f <- input$map_fichier
+  if (is.null(f)) return(NULL)
+  
+  res <- f$datapath |> 
+    map(lecture_map)
+  
+  if (any(unlist(map(res, is.null))) || any(unlist(map(res, nrow)) == 0)) return(NULL)
+  
+  bind_rows(res)
+})
+
+depenses_map_non_nettoyees <- reactive({
+  f <- input$map_fichier
+  if (is.null(f)) return(NULL)
+  
+  f$datapath |> 
+    map(~ lecture_map(.x, nettoyage = FALSE)) |> 
+    bind_rows()
+})
 
 depenses_map <- reactive(depenses_map_brutes() |> calcul_depenses_map())
 
@@ -803,7 +823,7 @@ plot_conso_annuelle <- reactive({
   conso$type <- factor(
     conso$type,
     levels = c("prévisionnel", "bloque", "reserve", "engage", "paye"),
-    labels = c("prévisionnel", "bloqué", "reservé", "engagé (non payé)", "payé")
+    labels = c("prévisionnel", "bloqué", "réservé", "engagé (non payé)", "payé")
   )
   
   ggplot(conso) +
@@ -1113,13 +1133,13 @@ renderUI({
   
   # vérification colonnes obligatoires
   if (!is.null(input$map_fichier) && is.null(depenses_map())) {
-    tmp <- readxl::read_excel(input$map_fichier$datapath)
+    tmp <- depenses_map_non_nettoyees()
     m <- !(cols_map_requises %in% names(tmp))
     manquantes <- cols_map_requises[m] |> paste(collapse = ", ")
     
     res <- c(
       "<p><strong style='color: red;'>",
-      "Le fichier chargé est incorrect. Il manque des variables requises.</strong><br />",
+      "Au moins un des fichiers chargés est incorrect. Il manque des variables requises.</strong><br />",
       "<em>Peut-être avez-vous chargé le mauvais fichier Excel&nbsp;?<br />",
       "Liste des colonnes manquantes&nbsp;: ",
       manquantes,
@@ -1130,7 +1150,7 @@ renderUI({
     
   # vérification colonnes optionnelles
   if (!is.null(input$map_fichier) && !is.null(depenses_map())) {
-  tmp <- readxl::read_excel(input$map_fichier$datapath)
+  tmp <- depenses_map_non_nettoyees()
   m <- !(cols_map_optionnelles_toutes %in% names(tmp))
   manquantes <- cols_map_optionnelles_toutes[m] |> paste(collapse = ", ")
   if (any(m))
@@ -1151,13 +1171,14 @@ renderUI({
 ```{r}
 fileInput(
   "map_fichier",
-  "Fichier Excel des dépenses exporté depuis MAP (optionnel)",
+  "Fichier(s) Excel des dépenses exporté(s) depuis MAP (optionnel)",
   accept = c(
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".xlsx"
   ),
   buttonLabel = HTML("<i class='fa fa-upload'></i>"),
-  placeholder = "choisir un fichier"
+  placeholder = "choisir un fichier",
+  multiple = TRUE
 )
 ```
 
@@ -1904,7 +1925,7 @@ plot_conso_ventilation <- reactive({
   conso$type <- factor(
     conso$type,
     levels = c("prévisionnel", "bloque", "reserve", "engage", "paye"),
-    labels = c("prévisionnel", "bloqué", "reservé", "engagé (non payé)", "payé")
+    labels = c("prévisionnel", "bloqué", "réservé", "engagé (non payé)", "payé")
   )
   ggplot(conso) +
     aes(y = groupe, fill = type, weight = montant) +
@@ -2144,6 +2165,10 @@ renderUI({
 Partie à rédiger
 
 **Modèle Excel pour les métadonnées :** [metadonnees_model.xlsx](https://github.com/larmarange/tbb/raw/main/metadonnees_modele.xlsx)
+
+**Fichiers d'export MAP :** il est possible de charger plusieurs fichiers simultanément dans le tableau de bord. Dans ce cas, les dépenses des différents fichiers s'additionnent.
+
+Voici la liste des colonnes requises pour l'exportation du détail des dépenses. Le mieux est de créer un favori dédié.
 
 **MAP colonnes obligatoires :**
 
