@@ -92,7 +92,7 @@ params$tableau_repartition |>
 ```{r, fig.width=11}
 p <- params$plot_conso_annuelle
 
-if (!is.null(p) && !is.na(p))
+if (!is.null(p))
   p +
     scale_y_continuous(labels = scales::label_number(accuracy = .01, big.mark = " ", decimal.mark = ","))
 ```
@@ -152,20 +152,20 @@ if (!is.null(params$depenses) && is.data.frame(params$depenses)) {
 ```{r, results='asis'}
 p <- params$plot_conso_ventilation
 
-if (!is.null(p) && !is.na(p))
+if (!is.null(p) && !is.character(p))
   cat("# Consommation selon ventilation budgétaire")
 ```
 
 
 ```{r, fig.width=11}
-if (!is.null(p) && !is.na(p))
+if (!is.null(p) && !is.character(p))
   p
 ```
 
 ```{r, results='asis'}
 tbl <- params$tableau_consommation_ventilation
 
-if (!is.null(p) && !is.na(p))
+if (!is.null(p) && !is.character(p))
   tbl |> 
     mutate(
       `GROUPE / rubrique de ventilation` = `GROUPE / rubrique de ventilation` |> 
