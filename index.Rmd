@@ -56,8 +56,18 @@ label_euro_gras <- function(x, prefixe = "") {
 }
 
 recoder_dates_excel <- function(x) {
-  x[x == "-"] <- NA
-  as.Date(as.integer(x), origin = "1899-12-30")
+  # cf. https://stackoverflow.com/questions/43230470/how-to-convert-excel-date-format-to-proper-date-in-r
+  if (inherits(x, "Date")) return(x)
+  x <- as.numeric(x)
+  if (max(c(0, x), na.rm = TRUE) < 100000) {
+    x <- x |> 
+      as.Date(origin = "1899-12-30")
+  } else {
+    x <- x |> 
+      lubridate::as_datetime(origin =  "1969-12-31 24:00:00") |> 
+      as.Date()
+  }
+  x
 }
 
 # Import métadonnées ----------
@@ -2202,7 +2212,7 @@ renderUI({
 
 Partie à rédiger
 
-**Modèle Excel pour les métadonnées :** [metadonnees_model.xlsx](https://github.com/larmarange/tbb/raw/main/metadonnees_modele.xlsx)
+**Modèle Excel pour les métadonnées :** [metadonnees_modele.xlsx](https://github.com/larmarange/tbb/raw/main/metadonnees_modele.xlsx)
 
 **Fichiers d'export MAP :** il est possible de charger plusieurs fichiers simultanément dans le tableau de bord. Dans ce cas, les dépenses des différents fichiers s'additionnent.
 
