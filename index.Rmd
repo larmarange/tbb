@@ -1590,14 +1590,24 @@ renderDataTable({
 </div>
 
 ```{r}
-renderUI({
-  res <- c("<p />")
+previsionnel_non_ventile <- reactive({
   total_hors_fg <- budget_total_hors_fg()
-  if (!is.null(total_hors_fg)) {
-    ventile <- saisie_config_ventilation() |> 
+  if (is.null(total_hors_fg)) return(NULL)
+  
+  ventile <- saisie_config_ventilation()
+  if (is.null(ventile)) return(NULL)
+  
+  ventile <- saisie_config_ventilation() |> 
       pull(previsionnel) |> 
       sum(na.rm = TRUE)
-    previ_non_ventile <- total_hors_fg - ventile
+  
+  return(total_hors_fg - ventile)
+})
+
+renderUI({
+  res <- c("<p />")
+  previ_non_ventile <- previsionnel_non_ventile()
+  if (!is.null(previ_non_ventile)) {
     res <- c(
       res,
       "<p>Budget prévisionnel non ventilé&nbsp;: ",
@@ -1913,6 +1923,18 @@ plot_conso_ventilation <- reactive({
     ) |> 
     select(id_ventilation, montant, groupe, type)
   
+  previ_non_ventile <- previsionnel_non_ventile()
+  if (!is.null(previ_non_ventile) && previ_non_ventile > 0)
+    previ <- bind_rows(
+      previ,
+      tibble(
+        id_ventilation = NA_character_,
+        montant = previ_non_ventile,
+        groupe = "prévisionnel",
+        type = "prévisionnel"
+      )
+    )
+  
   conso <- bind_rows(conso, previ) |> 
     left_join(
       config |> select(id_ventilation, groupe_ventilation = groupe, rubrique),
@@ -1962,6 +1984,18 @@ tableau_consommation_ventilation <- reactive({
   
   config <- config_ventilation()
   if (is.null(config)) return(NULL)
+  
+  previ_non_ventile <- previsionnel_non_ventile()
+  if (!is.null(previ_non_ventile) && previ_non_ventile > 0)
+    config <- bind_rows(
+      config,
+      tibble(
+        id_ventilation = NA_character_,
+        rubrique = NA_character_,
+        groupe = NA_character_,
+        previsionnel = previ_non_ventile
+      )
+    )
   
   tbl <- conso |>
     group_by(id_ventilation, annee, .drop = FALSE) |>
