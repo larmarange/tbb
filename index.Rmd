@@ -1260,7 +1260,9 @@ output$rapport <- downloadHandler(
           depenses = depenses(),
           plot_conso_annuelle = plot_conso_annuelle(),
           tableau_consommation_annuelle = tableau_consommation_annuelle(),
-          tableau_personnel = tableau_personnel()
+          tableau_personnel = tableau_personnel(),
+          plot_conso_ventilation = plot_conso_ventilation(),
+          tableau_consommation_ventilation = tableau_consommation_ventilation()
         )
 
         # Knit the document, passing in the `params` list, and eval it in a
@@ -2010,6 +2012,7 @@ tableau_consommation_ventilation <- reactive({
   tbl <- conso |>
     group_by(id_ventilation, annee, .drop = FALSE) |>
     summarise(consomme = sum(consomme, na.rm = TRUE)) |>
+    filter(!is.na(annee)) |> 
     tidyr::pivot_wider(
       names_from = annee,
       values_from = consomme,

@@ -17,6 +17,8 @@ params:
   tableau_personnel: NA
   plot_conso_annuelle: NA
   tableau_consommation_annuelle: NA
+  plot_conso_ventilation: NA
+  tableau_consommation_ventilation: NA
 ---
 
 ```{r setup, include=FALSE}
@@ -145,4 +147,31 @@ if (!is.null(params$depenses) && is.data.frame(params$depenses)) {
       print()
   }
 }
+```
+
+```{r, results='asis'}
+p <- params$plot_conso_ventilation
+
+if (!is.null(p) && !is.na(p))
+  cat("# Consommation selon ventilation budgétaire")
+```
+
+
+```{r, fig.width=11}
+if (!is.null(p) && !is.na(p))
+  p
+```
+
+```{r, results='asis'}
+tbl <- params$tableau_consommation_ventilation
+
+if (!is.null(p) && !is.na(p))
+  tbl |> 
+    mutate(
+      `GROUPE / rubrique de ventilation` = `GROUPE / rubrique de ventilation` |> 
+        str_remove("<strong class='groupe_ventilation'>") |> 
+        str_remove("</strong>")
+    ) |> 
+    knitr::kable(format = "latex") |> 
+    print()
 ```
