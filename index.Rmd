@@ -721,7 +721,7 @@ depenses <- reactive({
     relocate(nature, id, .after = last_col())
   
   # masquer les dépenses nulles -----------
-  if (input$masquer_dep_nulles == "TRUE") {
+  if (input$exclure_dep_nulles == "TRUE") {
     dep <- dep |> 
       filter(montant != 0)
   }
@@ -850,7 +850,7 @@ plot_conso_annuelle <- reactive({
       values_to = "montant"
     ) |> 
     mutate(groupe = "consommé") |> 
-    filter(montant > 0)
+    filter(montant != 0)
   
   previ <- repartition()
   if (!is.null(previ)) {
@@ -1246,15 +1246,15 @@ fileInput(
 )
 ```
 
-**Simplification des dépenses**
+**Simplification des dépenses liées aux exercices précédents**
 
-<p style="font-size:.9em;">Voir l'Aide. N'impacte pas le total consommé.</p>
+<p style="font-size:.9em;">Voir l'Aide.<br />N'impacte pas le total consommé.</p>
 
 ```{r}
 materialSwitch(
   inputId = "simplication_ae",
   status = "primary",
-  value = FALSE,
+  value = TRUE,
 )
 ```
 
@@ -1264,7 +1264,7 @@ materialSwitch(
 
 ```{r}
 materialSwitch(
-  inputId = "masquer_dep_nulles",
+  inputId = "exclure_dep_nulles",
   status = "primary",
   value = FALSE,
 )
@@ -2005,7 +2005,7 @@ plot_conso_ventilation <- reactive({
       values_to = "montant"
     ) |>
     mutate(groupe = "consommé") |>
-    filter(montant > 0)
+    filter(montant != 0)
   
   config <- config_ventilation()
   if (is.null(config)) return(NULL)
@@ -2019,7 +2019,7 @@ plot_conso_ventilation <- reactive({
     select(id_ventilation, montant, groupe, type)
   
   previ_non_ventile <- previsionnel_non_ventile()
-  if (!is.null(previ_non_ventile) && previ_non_ventile > 0)
+  if (!is.null(previ_non_ventile) && previ_non_ventile != 0)
     previ <- bind_rows(
       previ,
       tibble(
@@ -2030,6 +2030,7 @@ plot_conso_ventilation <- reactive({
       )
     )
   
+  config$groupe <- as.character(config$groupe)
   conso <- bind_rows(conso, previ) |> 
     left_join(
       config |> select(id_ventilation, groupe_ventilation = groupe, rubrique),
@@ -2222,7 +2223,7 @@ renderUI({
   if (is.null(dep)) return(NULL)
   
   # masquer les dépenses nulles -----------
-  if (input$masquer_dep_nulles == "TRUE") {
+  if (input$exclure_dep_nulles == "TRUE") {
     dep <- dep |> 
       filter(reserve + engage + paye + bloque != 0)
   }
@@ -2350,7 +2351,7 @@ Pour suivre les dépenses d'une convention de recherche dans TBB, il est préfé
 
 Pour le suivi d'une dotation non fongible (non reportable d'une année sur l'autre), il sera préférable de limiter le suivi dans TBB à un seul exercice à la fois.
 
-**Simplification des dépenses :**
+**Simplification des dépenses liées aux exercices précédents :**
 
 Lorsque l'on suit les dépenses d'un seul exercice (par exemple les crédits d'une dotation d'une tutelle non reportables d'une année sur l'autre), les données de dépenses de l'exercice en cours exportées depuis un outil comme MAP à l'IRD peuvent contenir des informations concernant des dépenses engagées sur l'exercice précédent (typiquement les commandes et missions réalisées en fin d'année). Une situation courante en le paiement en année N d'une commande engagée sur les crédits de l'année N-1. Cela va se traduire par une consommation de CP (crédits de paiement) sur l'exercice en cours et, pour éviter que cela ne consomme les crédits de l'année en cours, par un remboursement équivalent en AE (autorisations d'engagement). Il en résulte un engagement négatif et un montant total nul. Si le montant finalement payé est supérieur à ce qui avait été réservé l'année précédente, la différence sera prise sur les crédits (AE) de l'année en cours. À l'inverse, si la facture est finalement inférieure, il peut y avoir un remboursement de la différence ou bien la création d'un blocage de fonds.
 
@@ -2358,5 +2359,5 @@ Ces différentes écritures compensatoires liées aux engagements de l'année N-
 
 **Exclure les dépenses nulles :**
 
-Pour simplifier l'affichage, cette option permet d'exclure du tableau de bord les dépenses dont le montant total est nul et donc sans impact sur la consommation du budget.
+Pour simplifier l'affichage, cette option permet d'exclure du tableau de bord les dépenses dont le montant total est nul et donc sans impact sur la consommation du budget. Si la simplification des dépenses n'est pas active, cela peut modifier la décomposition entre "engagé", "payé" et "bloqué".
 
