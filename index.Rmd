@@ -17,6 +17,7 @@ library(DT)
 library(plotly)
 library(shiny)
 library(shinyjs)
+library(shinyWidgets)
 library(kableExtra)
 library(DataEditR)
 
@@ -48,10 +49,10 @@ label_euro_bis <- scales::label_dollar(
 
 label_euro_gras <- function(x, prefixe = "") {
   paste0(
-    if_else(x > 0, "<strong>", ""),
+    if_else(x != 0, "<strong>", ""),
     prefixe,
     label_euro(x),
-    if_else(x > 0, "</strong>", "")
+    if_else(x != 0, "</strong>", "")
   )
 }
 
@@ -719,6 +720,38 @@ depenses <- reactive({
     relocate(montant, .before = reserve) |> 
     relocate(nature, id, .after = last_col())
   
+  # masquer les dépenses nulles -----------
+  if (input$masquer_dep_nulles == "TRUE") {
+    dep <- dep |> 
+      filter(montant != 0)
+  }
+  
+  
+  # simplification des dépenses --------
+  
+  if (input$simplication_ae == "TRUE") {
+    dep <- dep |> 
+      mutate(
+        correction_bloque = case_when(
+          engage < 0 & abs(engage) <= bloque ~ abs(engage),
+          engage < 0 & abs(engage) > bloque ~ bloque,
+          TRUE ~ 0
+        ),
+        engage = engage + correction_bloque,
+        bloque = bloque - correction_bloque
+      ) |>
+      mutate(
+        correction_paye = case_when(
+          engage < 0 & abs(engage) <= paye ~ abs(engage),
+          engage < 0 & abs(engage) > paye ~ paye,
+          TRUE ~ 0
+        ),
+        engage = engage + correction_paye,
+        paye = paye - correction_paye
+      ) |>
+      select(-correction_paye, -correction_bloque)
+  }
+  
   dep
 })
 
@@ -752,31 +785,41 @@ total_bloque <- reactive({
   sum(dep$bloque, na.rm = TRUE)
 })
 
-total_disponible <- reactive({
-  total_hors_fg <- budget_total_hors_fg()
+total_consomme <- reactive({
   reserve <- total_reserve()
   engage <- total_engage()
   paye <- total_paye()
   bloque <- total_bloque()
   
   if (any(
-    is.null(total_hors_fg),
     is.null(reserve),
     is.null(engage),
     is.null(paye),
     is.null(bloque)
   )) return(NULL)
   
-  total_hors_fg - reserve - engage - paye - bloque
+  reserve + engage + paye + bloque
+})
+
+total_disponible <- reactive({
+  total_hors_fg <- budget_total_hors_fg()
+  consomme <- total_consomme()
+  
+  if (any(
+    is.null(total_hors_fg),
+    is.null(consomme)
+  )) return(NULL)
+  
+  total_hors_fg - consomme
 })
 
 proportion_consomme <- reactive({
   budget <- budget_total_hors_fg()
-  disponible <- total_disponible()
+  consomme <- total_consomme()
   
-  if (is.null(budget) || is.null(disponible)) return(NULL)
+  if (is.null(budget) || is.null(consomme)) return(NULL)
   
-  (budget - disponible) / budget
+  consomme / budget
 })
 
 # Consommation annuelle --------
@@ -1160,18 +1203,29 @@ renderUI({
     
   # vérification colonnes optionnelles
   if (!is.null(input$map_fichier) && !is.null(depenses_map())) {
-  tmp <- depenses_map_non_nettoyees()
-  m <- !(cols_map_optionnelles_toutes %in% names(tmp))
-  manquantes <- cols_map_optionnelles_toutes[m] |> paste(collapse = ", ")
-  if (any(m))
-    res <- c(
-      "<p style='font-size: .9em;'><em>",
-      "Colonnes optionnelles manquantes&nbsp;: ",
-      manquantes,
-      ". Elles ne sont pas obligatoires mais améliorent la description des dépenses.",
-      "</em></p>"
-    )
-}
+    n_fichiers <- nrow(input$map_fichier)
+    if (n_fichiers == 1) {
+      tmp <- depenses_map_non_nettoyees()
+      m <- !(cols_map_optionnelles_toutes %in% names(tmp))
+      manquantes <- cols_map_optionnelles_toutes[m] |> paste(collapse = ", ")
+      if (any(m))
+        res <- c(
+          "<p style='font-size: .9em;'><em>",
+          "Colonnes optionnelles manquantes&nbsp;: ",
+          manquantes,
+          ". Elles ne sont pas obligatoires mais améliorent la description des dépenses.",
+          "</em></p>"
+        )  
+    } else {
+      res <- c(
+        "<p style='font-size: .9em;'><em>",
+        n_fichiers,
+        " fichiers de dépense chargés et fusionnés. ",
+        "Pour vérifier les colonnes optionnelles, chargez chaque fichier séparément.",
+        "</em></p>"
+      )
+    }
+  }
 
   HTML(res)
 })
@@ -1192,7 +1246,32 @@ fileInput(
 )
 ```
 
+**Simplification des dépenses**
+
+<p style="font-size:.9em;">Voir l'Aide. N'impacte pas le total consommé.</p>
+
+```{r}
+materialSwitch(
+  inputId = "simplication_ae",
+  status = "primary",
+  value = FALSE,
+)
+```
+
+**Exclure les dépenses nulles**
+
+<p style="font-size:.9em;">Voir l'Aide.</p>
+
+```{r}
+materialSwitch(
+  inputId = "masquer_dep_nulles",
+  status = "primary",
+  value = FALSE,
+)
+```
+
 **Ventilation budgétaire**
+
 
 ```{r}
 renderUI({
@@ -1276,6 +1355,8 @@ output$rapport <- downloadHandler(
     )
 ```
 
+
+
 <a href="./" class="btn btn-default" id="reset"><i class="fa fa-trash"></i> Réinitialiser</a>
 
 # Vue d'ensemble {#accueil data-icon="fa-clipboard" data-orientation=rows}
@@ -1310,6 +1391,7 @@ renderValueBox(
 ```{r}
 renderValueBox({
   prop <- proportion_consomme()
+  consomme <- total_consomme()
   color <- case_when(
     is.null(prop) ~ "#AAAAAA",
     !is.null(prop) && prop < .5 ~ "#44AA99",
@@ -1317,10 +1399,11 @@ renderValueBox({
     !is.null(prop) && prop < 1 ~ "#EE99AA",
     TRUE ~ "#BB5566"
   )
-  if (is.null(prop)) {
+  if (is.null(prop) && is.null(consomme)) {
     value <- "-"
+  } else if(is.null(prop) && !is.null(consomme)) {
+    value <- consomme |> label_euro()
   } else {
-    consomme <- budget_total_hors_fg() - total_disponible()
     value <- paste(
       consomme |> label_euro(),
       "(" %p% (prop |> scales::percent(accuracy = .1)) %p% ")"
@@ -2077,6 +2160,8 @@ renderTable(
 
 **Consommation par eOTP, CFI & Exercice (restreinte aux données issues de MAP IRD)**
 
+Cette vue ne tient pas compte de la simplification des dépenses (si activée) ni de l'exclusion des dépenses nulles (si activée).
+
 ```{r}
 renderDataTable({
   tbl <- consommation_map()
@@ -2099,9 +2184,11 @@ renderDataTable({
 })
 ```
 
-# Synthèse par déplacement / commande {data-navmenu="Détails MAP" data-orientation=rows}
+# Synthèse par déplacement / commande {data-navmenu="Détails MAP"}
 
 **Synthèse par déplacement / commande, eOTP, CFI & Exercice (restreinte aux données issues de MAP IRD)**
+
+Cette vue ne tient pas compte de la simplification des dépenses (si activée) ni de l'exclusion des dépenses nulles (si activée).
 
 ```{r}
 renderDataTable({
@@ -2133,6 +2220,12 @@ renderDataTable({
 renderUI({
   dep <- depenses_map()
   if (is.null(dep)) return(NULL)
+  
+  # masquer les dépenses nulles -----------
+  if (input$masquer_dep_nulles == "TRUE") {
+    dep <- dep |> 
+      filter(reserve + engage + paye + bloque != 0)
+  }
   
   details <- depenses_map_brutes() |> 
     select(-starts_with("e_")) |> 
@@ -2175,6 +2268,26 @@ renderUI({
       TRUE ~ ""
     )
     
+  # simplification des dépenses --------
+  
+  if (input$simplication_ae == "TRUE") {
+    correction_bloque <- case_when(
+      engage < 0 & abs(engage) <= bloque ~ abs(engage),
+      engage < 0 & abs(engage) > bloque ~ bloque,
+      TRUE ~ 0
+    )
+    engage <- engage + correction_bloque
+    bloque <- bloque - correction_bloque
+    
+    correction_paye <- case_when(
+      engage < 0 & abs(engage) <= paye ~ abs(engage),
+      engage < 0 & abs(engage) > paye ~ paye,
+      TRUE ~ 0
+    )
+    engage <- engage + correction_paye
+    paye <- paye - correction_paye
+  }
+    
     res <- c(
       res, 
       "<p><strong>" %p% type_depense %p% " n°" %p% str_sub(i, 6) %p% 
@@ -2213,8 +2326,6 @@ renderUI({
 
 # Aide {data-icon="fa-circle-question"}
 
-Partie à rédiger
-
 **Modèle Excel pour les métadonnées :** [metadonnees_modele.xlsx](https://github.com/larmarange/tbb/raw/main/metadonnees_modele.xlsx)
 
 **Fichiers d'export MAP :** il est possible de charger plusieurs fichiers simultanément dans le tableau de bord. Dans ce cas, les dépenses des différents fichiers s'additionnent.
@@ -2232,3 +2343,20 @@ cat(paste("-", cols_map_requises, collapse = "\n"))
 ```{r, results='asis'}
 cat(paste("-", cols_map_optionnelles_toutes, collapse = "\n"))
 ```
+
+**Quel(s) exercice(s) prendre en compte ?**
+
+Pour suivre les dépenses d'une convention de recherche dans TBB, il est préférable de considérer l'ensemble de la convention depuis le début et donc l'ensemble des exercices (années) concernés par cette convention. Le fichier de métadonnées décrira ainsi l'ensemble du prévisionnel du début jusqu'à la fin de la convention, tandis que les exports de dépenses concerneront l'ensemble des exercices comptables. Les informations concernant une mission ou une commande sur plusieurs exercices seront ainsi fusionnées.
+
+Pour le suivi d'une dotation non fongible (non reportable d'une année sur l'autre), il sera préférable de limiter le suivi dans TBB à un seul exercice à la fois.
+
+**Simplification des dépenses :**
+
+Lorsque l'on suit les dépenses d'un seul exercice (par exemple les crédits d'une dotation d'une tutelle non reportables d'une année sur l'autre), les données de dépenses de l'exercice en cours exportées depuis un outil comme MAP à l'IRD peuvent contenir des informations concernant des dépenses engagées sur l'exercice précédent (typiquement les commandes et missions réalisées en fin d'année). Une situation courante en le paiement en année N d'une commande engagée sur les crédits de l'année N-1. Cela va se traduire par une consommation de CP (crédits de paiement) sur l'exercice en cours et, pour éviter que cela ne consomme les crédits de l'année en cours, par un remboursement équivalent en AE (autorisations d'engagement). Il en résulte un engagement négatif et un montant total nul. Si le montant finalement payé est supérieur à ce qui avait été réservé l'année précédente, la différence sera prise sur les crédits (AE) de l'année en cours. À l'inverse, si la facture est finalement inférieure, il peut y avoir un remboursement de la différence ou bien la création d'un blocage de fonds.
+
+Ces différentes écritures compensatoires liées aux engagements de l'année N-1 peuvent compliquer la lecture du tableau de bord, notamment en induisant des engagements négatifs. La fonction de **simplification des dépenses** vise à simplifier/annuler ces compensations dans le calcul de la désaggrétion des dépenses entre "engagé", "payé" et "bloqué". Cela ne modifie pas le montant total de chaque dépense. Le montant consommé est ainsi préservé.
+
+**Exclure les dépenses nulles :**
+
+Pour simplifier l'affichage, cette option permet d'exclure du tableau de bord les dépenses dont le montant total est nul et donc sans impact sur la consommation du budget.
+
