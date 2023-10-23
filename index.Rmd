@@ -345,8 +345,8 @@ cols_map_dates_optionnelles <- c(
 )
 
 cols_map_num_optionnelles <- c(
-  "Liquidé EJ année N",
-  "Liquidé EJ antérieurs"
+  #"Liquidé EJ année N",
+  #"Liquidé EJ antérieurs"
 )
 
 cols_map_optionnelles_toutes <- c(
@@ -455,7 +455,6 @@ lecture_map <- function(fichier, nettoyage = TRUE) {
     ) |> 
     ungroup() |> 
     mutate(
-      `Liquidé` = `Liquidé EJ année N` + `Liquidé EJ antérieurs`,
       dplt = `Dépl. : N° déplacement`,
       cmde = `Cde achat : Num pièce`,
       fact = `Fact : Num pièce FI`,
@@ -971,7 +970,6 @@ calcul_consommation_map <- function(map) {
     summarise(
       `Solde réservations` = sum(`Solde réservations`),
       `Engagé (AE consommés)` = sum(`AE consommés`),
-      `Liquidé (Liquidés EJ année N + antérieurs)` = sum(`Liquidé`),
       `Payé (CP consommés)` = sum(`CP consommés`),
       `Blocage de fond` = sum(`Blocage de fond`)
     ) |> 
@@ -1003,7 +1001,6 @@ synthese_map <- reactive({
     summarise(
       `Solde réservations` = sum(`Solde réservations`),
       `Engagé (AE consommés)` = sum(`AE consommés`),
-      `Liquidé (Liquidés EJ année N + antérieurs)` = sum(`Liquidé`),
       `Payé (CP consommés)` = sum(`CP consommés`),
       `Blocage de fond` = sum(`Blocage de fond`)
     ) |> 
@@ -2180,7 +2177,7 @@ renderDataTable({
     rownames = FALSE,
     extensions = 'Buttons'
   ) |> 
-    formatRound(columns = 5:10, mark = "") |> 
+    formatRound(columns = 5:9, mark = "") |> 
     formatStyle(columns = c(1, 2, 4, 5), fontWeight = "bold")
 })
 ```
@@ -2208,7 +2205,7 @@ renderDataTable({
     rownames = FALSE,
     extensions = 'Buttons'
   ) |> 
-    formatRound(columns = 8:13, mark = "") |> 
+    formatRound(columns = 8:12, mark = "") |> 
     formatStyle(columns = c(2,8), fontWeight = "bold")
 })
 ```
@@ -2237,8 +2234,6 @@ renderUI({
       `Nature de dépenses`,
       `Solde réservations`,
       `AE consommés`,
-      `Liquidé EJ année N`,
-      `Liquidé EJ antérieurs`,
       `CP consommés`,
       everything()
     )
