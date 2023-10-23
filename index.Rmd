@@ -432,10 +432,10 @@ lecture_map <- function(fichier, nettoyage = TRUE) {
         if_else(`Dépl :  Nom` == "-", e_nom, `Dépl :  Nom`),
       `Dépl. : N° déplacement`= 
         if_else(`Dépl. : N° déplacement` == "-", e_deplacement, `Dépl. : N° déplacement`),
-      `AE consommés` = round(`AE consommés`, digits = 0),
-      `Solde réservations` = round(`Solde réservations`, digits = 0),
-      `CP consommés` = round(`CP consommés`, digits = 0),
-      `Blocage de fond` = round(`Blocage de fond`, digits = 0)
+      `AE consommés` = round(`AE consommés`, digits = 2),
+      `Solde réservations` = round(`Solde réservations`, digits = 2),
+      `CP consommés` = round(`CP consommés`, digits = 2),
+      `Blocage de fond` = round(`Blocage de fond`, digits = 2)
     )
   
   # si blocage de fonds, le numéro de commande peut être récupéré dans Blocage : Texte
