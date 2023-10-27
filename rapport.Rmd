@@ -121,29 +121,27 @@ if (!"Année" %in% names(tbl)) {
 
 # Détail des dépenses
 
+Pour un tableau plus détaillé, consulter le Tableau de Bord Budgétaire en ligne : <https://analytics.huma-num.fr/Joseph.Larmarange/tbb/>
+
 ```{r, results='asis'}
 if (!is.null(params$depenses) && is.data.frame(params$depenses)) {
   dep <- params$depenses |> 
-    select(-id) |> 
+    select(annee, description, montant) |> 
     mutate(
-      description = description |> str_trunc(50),
+      description = description |> str_to_lower() |> str_trunc(150),
       groupe = trunc(1:n() / 25)
     ) |> 
     rename(
-      `Nature de la dépense` = nature,
       `Année` = annee,
       `Description` = description,
-      `Total` = montant,
-      `Réservé` = reserve,
-      `Engagé (non payé)` = engage,
-      `Payé` = paye,
-      `Bloqué` = bloque
+      `Montant` = montant,
     )
   for (i in unique(dep$groupe)) {
     dep |> 
       filter(groupe == i) |> 
       select(-groupe) |> 
       knitr::kable(format = "latex") |> 
+      kable_styling(font_size = 8, position = "left") |> 
       print()
   }
 }
@@ -170,8 +168,14 @@ if (!is.null(p) && !is.character(p))
     mutate(
       `GROUPE / rubrique de ventilation` = `GROUPE / rubrique de ventilation` |> 
         str_remove("<strong class='groupe_ventilation'>") |> 
-        str_remove("</strong>")
+        str_remove("</strong>") |> 
+        str_trunc(60)
+    ) |> 
+    rename(
+      `Total` = `Total consommé`,
+      `%` = `Part consommée`
     ) |> 
     knitr::kable(format = "latex") |> 
+    kable_styling(font_size = 8, position = "left") |> 
     print()
 ```
