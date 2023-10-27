@@ -226,6 +226,9 @@ lecture_personnel <- function(fichier) {
   if (!all(cols_personnel %in% names(personnel)))
     return(NULL)
   
+  if (!"notes" %in% names(personnel))
+    personnel$notes <- ""
+  
   personnel <- personnel |> 
     select(-any_of("total")) |> 
     filter(!is.na(id)) |> 
@@ -291,6 +294,9 @@ lecture_autres_depenses <- function(fichier) {
                        "reserve", "engage", "paye", "bloque")
   if (!all(cols_autres_dep %in% names(autres_dep)))
     return(NULL)
+  
+  if (!"notes" %in% names(autres_dep))
+    autres_dep$notes <- ""
   
   autres_dep <- autres_dep |> 
     select(-any_of("total")) |> 
@@ -513,6 +519,10 @@ description_cmde <- function(date, fournisseur, texte_correspondance, poste, fac
   )
 }
 
+notes_map <- function(cfi, eotp) {
+  "CFI : " %p% paste(unique(cfi), collapse = ",") %p% ", eOTP : " %p% paste(unique(eotp), collapse = ",")
+}
+
 calcul_depenses_map <- function(map) {
   if (is.null(map))
     return(NULL)
@@ -548,7 +558,8 @@ calcul_depenses_map <- function(map) {
         reserve = sum(reserve),
         ae = sum(ae),
         paye = sum(paye),
-        bloque = sum(bloque)
+        bloque = sum(bloque),
+        notes = notes_map(`CF - Code`, `eOTP : Code`)
       ) |> 
       rowwise() |> 
       mutate(
@@ -578,7 +589,8 @@ calcul_depenses_map <- function(map) {
         reserve = sum(reserve),
         ae = sum(ae),
         paye = sum(paye),
-        bloque = sum(bloque)
+        bloque = sum(bloque),
+        notes = notes_map(`CF - Code`, `eOTP : Code`)
       ) |>  
       rowwise() |> 
       mutate(
@@ -606,7 +618,8 @@ calcul_depenses_map <- function(map) {
           reserve = sum(reserve),
           ae = sum(ae),
           paye = sum(paye),
-          bloque = sum(bloque)
+          bloque = sum(bloque),
+          notes = notes_map(`CF - Code`, `eOTP : Code`)
         ) |>  
         rowwise() |> 
         mutate(
@@ -627,7 +640,8 @@ calcul_depenses_map <- function(map) {
         reserve = sum(reserve),
         ae = sum(ae),
         paye = sum(paye),
-        bloque = sum(bloque)
+        bloque = sum(bloque),
+        notes = notes_map(`CF - Code`, `eOTP : Code`)
       ) |>  
       rowwise() |> 
       mutate(
@@ -635,12 +649,17 @@ calcul_depenses_map <- function(map) {
       )
   }
   
-  bind_rows(missions, commandes, factures, non_identifiees) |> 
+  res <- bind_rows(missions, commandes, factures, non_identifiees) |> 
     mutate(
       engage = round(ae - paye - bloque, digits = 2),
       annee = as.integer(annee)
-    ) |> 
-    select(nature, annee, id, description, reserve, engage, paye, bloque)
+    )
+  
+  if (!"notes" %in% colnames(res))
+    res$notes <- ""
+  
+  res |> 
+    select(nature, annee, id, description, reserve, engage, paye, bloque, notes)
 }
 
 depenses_map_brutes <- reactive({
@@ -681,7 +700,7 @@ depenses <- reactive({
         engage = 0,
         bloque = 0
       ) |> 
-      select(nature, annee, id, description, reserve, engage, paye, bloque)
+      select(nature, annee, id, description, reserve, engage, paye, bloque, notes)
   }
   
   dep_ad <- autres_depenses()
@@ -689,7 +708,7 @@ depenses <- reactive({
     dep_ad <- tibble::tibble()
   } else {
     dep_ad <- dep_ad |> 
-      select(nature, annee, id, description, reserve, engage, paye, bloque) |> 
+      select(nature, annee, id, description, reserve, engage, paye, bloque, notes) |> 
       mutate(
         id = paste0("dep_", id),
       )
@@ -717,7 +736,7 @@ depenses <- reactive({
       montant = reserve + engage + paye + bloque
     ) |> 
     relocate(montant, .before = reserve) |> 
-    relocate(nature, id, .after = last_col())
+    relocate(nature, id, notes, .after = last_col())
   
   # masquer les dépenses nulles -----------
   if (input$exclure_dep_nulles == "TRUE") {
@@ -1595,7 +1614,7 @@ renderTable(
 
 # Détail des Dépenses {#depenses data-icon="fa-euro" data-orientation=rows}
 
-## Explications {data-height=10}
+### Explications {data-height=10}
 
 ```{r}
 renderUI({
@@ -1642,7 +1661,8 @@ renderDataTable({
       `Réservé` = reserve,
       `Engagé (non payé)` = engage,
       `Payé` = paye,
-      `Bloqué` = bloque
+      `Bloqué` = bloque,
+      `Notes` = notes
     )
   
   datatable(
@@ -2182,7 +2202,9 @@ renderDataTable({
 })
 ```
 
-# Synthèse par déplacement / commande {data-navmenu="Détails MAP"}
+# Synthèse par déplacement / commande {data-navmenu="Détails MAP" data-orientation=rows}
+
+### Synthèse par déplacement / commande
 
 **Synthèse par déplacement / commande, eOTP, CFI & Exercice (restreinte aux données issues de MAP IRD)**
 
@@ -2212,7 +2234,7 @@ renderDataTable({
 
 # Détails déplacements / commandes {#details-map data-navmenu="Détails MAP"}
 
-**Détails des déplacements / commandes (données issues de MAP IRD uniquement)**
+### Détails des déplacements / commandes (données issues de MAP IRD uniquement)
 
 ```{r}
 renderUI({
