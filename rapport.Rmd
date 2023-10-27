@@ -114,6 +114,7 @@ if (!"Année" %in% names(tbl)) {
 } else {
   tbl |> 
     knitr::kable(format = "latex") |> 
+    kable_styling(font_size = 8, position = "left") |> 
     print()
 }
 ```
