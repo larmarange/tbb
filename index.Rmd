@@ -2165,10 +2165,11 @@ tableau_consommation_ventilation <- reactive({
     mutate(
       `Total consommé` = sum(c_across(where(is.numeric)))
     ) |> 
-    left_join(
+    full_join(
       config |> select(id_ventilation, rubrique, groupe, previsionnel),
       by = "id_ventilation"
     ) |> 
+    mutate(across(where(is.numeric), ~ replace_na(.x, 0))) |> 
     rename(`Prévisionnel` = previsionnel) |> 
     relocate(groupe, rubrique) |> 
     select(-id_ventilation) |> 
