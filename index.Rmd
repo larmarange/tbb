@@ -686,6 +686,94 @@ depenses_map_non_nettoyees <- reactive({
 depenses_map <- reactive(depenses_map_brutes() |> calcul_depenses_map())
 
 
+# Import SIFAC ------------------
+
+cols_sifac_requises <- c(
+  "Numéro de flux",
+  "Libellé du flux",
+  "Date initiale de l'engagement",
+  "Nom du tiers",
+  "Libellé Compte général",
+  "Montant engagé HTR",
+  "Montant payé HTR",
+  "Centre fin.",
+  "Elément d'OTP",
+  "Rubrique de la pièce"
+)
+
+
+lecture_sifac <- function(fichier, nettoyage = TRUE) {
+  if (is.null(fichier))
+    return(NULL)
+  depenses_sifac <- tryCatch(
+    readxl::read_excel(fichier),
+    error = function(e) {NULL}
+  )
+  
+  if (!nettoyage) return(depenses_sifac)
+  
+  if (!all(cols_sifac_requises %in% names(depenses_sifac)))
+    return(NULL)
+  
+  depenses_sifac
+}
+
+depenses_sifac_brutes <- reactive({
+  f <- input$sifac_fichier
+  if (is.null(f)) return(NULL)
+  
+  res <- f$datapath |> 
+    map(lecture_sifac)
+  
+  if (any(unlist(map(res, is.null))) || any(unlist(map(res, nrow)) == 0)) return(NULL)
+  
+  bind_rows(res)
+})
+
+resume_champ <- function(champ) {
+  paste(unique(champ), collapse = ", ")
+}
+
+calcul_depenses_sifac <- function(dep) {
+  if (is.null(dep)) return(NULL)
+  
+  dep <- dep |> 
+    mutate(id = paste0("sifac_", `Numéro de flux`)) |> 
+    group_by(id) |> 
+    summarise(
+      annee = year(min(`Date initiale de l'engagement`)),
+      description = paste(
+        resume_champ(`Nom du tiers`),
+        resume_champ(`Libellé du flux`),
+        resume_champ(`Libellé Compte général`),
+        sep = " / "
+      ),
+      montant = sum(`Montant engagé HTR`),
+      paye = sum(`Montant payé HTR`),
+      reserve = 0,
+      bloque = 0,
+      nature = "Fonctionnement",
+      notes = notes_map(`Centre fin.`, `Elément d'OTP`)
+    ) |> 
+    mutate(
+      engage = montant - paye,
+    )
+  
+  dep |> 
+    select(annee, description, montant, reserve, engage, paye, bloque, nature, id, notes)
+}
+
+depenses_sifac <- reactive(depenses_sifac_brutes() |> calcul_depenses_sifac())
+
+depenses_sifac_non_nettoyees <- reactive({
+  f <- input$sifac_fichier
+  if (is.null(f)) return(NULL)
+  
+  f$datapath |> 
+    map(~ lecture_sifac(.x, nettoyage = FALSE)) |> 
+    bind_rows()
+})
+
 # Création du fichier des dépenses ---------------
 
 depenses <- reactive({
@@ -722,7 +810,11 @@ depenses <- reactive({
         mutate(id = paste0("map_", id))
   }
   
-  dep <- bind_rows(dep_p, dep_ad, dep_ird_map)
+  dep_sifac <- depenses_sifac()
+  if (is.null(dep_sifac))
+    dep_sifac <- tibble::tibble()
+  
+  dep <- bind_rows(dep_p, dep_ad, dep_ird_map, dep_sifac)
   
   if (nrow(dep) == 0)
     return(NULL)
@@ -1261,6 +1353,48 @@ fileInput(
   multiple = TRUE
 )
 ```
+
+**Dépenses SIFAC**
+
+```{r}
+renderUI({
+  res <- NULL
+  
+  # vérification colonnes obligatoires
+  if (!is.null(input$sifac_fichier) && is.null(depenses_sifac())) {
+    tmp <- depenses_sifac_non_nettoyees()
+    m <- !(cols_sifac_requises %in% names(tmp))
+    manquantes <- cols_sifac_requises[m] |> paste(collapse = ", ")
+    
+    res <- c(
+      "<p><strong style='color: red;'>",
+      "Au moins un des fichiers chargés est incorrect. Il manque des variables requises.</strong><br />",
+      "<em>Peut-être avez-vous chargé le mauvais fichier Excel&nbsp;?<br />",
+      "Liste des colonnes manquantes&nbsp;: ",
+      manquantes,
+      ".",
+      "</em></p>"
+    )
+  }
+
+  HTML(res)
+})
+```
+
+```{r}
+fileInput(
+  "sifac_fichier",
+  "Fichier(s) Excel des dépenses exporté(s) depuis SIFAC (optionnel)",
+  accept = c(
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xlsx"
+  ),
+  buttonLabel = HTML("<i class='fa fa-upload'></i>"),
+  placeholder = "choisir un fichier",
+  multiple = TRUE
+)
+```
+
 
 **Simplification des dépenses liées aux exercices précédents**
 
@@ -2386,6 +2520,32 @@ renderUI({
 })
 ```
 
+# Détails SIFAC {data-icon="fa-table" data-orientation=rows}
+
+**Dépenses SIFAC par numéro de flux**
+
+Cette vue ne tient pas compte de la simplification des dépenses (si activée) ni de l’exclusion des dépenses nulles (si activée).
+
+```{r}
+renderDataTable({
+  tbl <- depenses_sifac()
+  if (is.null(tbl)) return(NULL)
+  datatable(
+    tbl,
+    options = list(
+      scrollX = TRUE,
+      scrollY = TRUE,
+      autowidth = TRUE,
+      pageLength = 100000, 
+      dom = 'Bfrtip',
+      buttons = c('csv', 'excel', 'pdf', 'print')
+    ),
+    rownames = FALSE,
+    extensions = 'Buttons'
+  )
+})
+```
+
 # Aide {data-icon="fa-circle-question"}
 
 **Modèle Excel pour les métadonnées :** [metadonnees_modele.xlsx](https://github.com/larmarange/tbb/raw/main/metadonnees_modele.xlsx)
@@ -2405,6 +2565,23 @@ cat(paste("-", cols_map_requises, collapse = "\n"))
 ```{r, results='asis'}
 cat(paste("-", cols_map_optionnelles_toutes, collapse = "\n"))
 ```
+
+**Fichiers d'export SIFAC :** il est possible de charger plusieurs fichiers simultanément dans le tableau de bord. Dans ce cas, les dépenses des différents fichiers s'additionnent.
+
+Voici la liste des colonnes requises pour l'exportation du détail des dépenses. Le mieux est de créer un favori dédié.
+
+**SIFAC colonnes obligatoires :**
+
+```{r, results='asis'}
+cat(paste("-", cols_sifac_requises, collapse = "\n"))
+```
+
+**Précisions concernant les exports SIFAC :**
+
+- Les dépenses sont groupées par numéro de flux.
+- L'année considérée pour une dépense est celle de la date initiale de l'engagement.
+- Toutes les dépenses sont considérées comme des dépenses de Fonctionnement.
+
 
 **Quel(s) exercice(s) prendre en compte ?**
 
