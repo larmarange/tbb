@@ -380,6 +380,11 @@ map_verif_existance_commande <- function(data, cmde) {
     "-"
 }
 
+NA_to_tiret <- function(x) {
+  if (is.character(x)) x[is.na(x)] <- "-"
+  x
+}
+
 lecture_map <- function(fichier, nettoyage = TRUE) {
   if (is.null(fichier))
     return(NULL)
@@ -477,6 +482,10 @@ lecture_map <- function(fichier, nettoyage = TRUE) {
         TRUE ~ paste0("autr_", `Nature de dépenses`, "_", Exercice) 
       )
     )
+  
+  map <- 
+    map |> 
+    mutate(across(where(is.character), NA_to_tiret))
   
   map
 }
