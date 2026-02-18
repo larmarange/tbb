@@ -1148,13 +1148,16 @@ synthese_map <- reactive({
 # Ventilation budgétaire ------
 
 import_config_ventilation <- reactive({
+  if (is.null(metas()$nom) && is.null(depenses())) return(NULL)
+  
   tbl_vide <- tibble(
-    id_ventilation = rep(NA_character_, 5),
-    rubrique = rep(NA_character_, 5),
-    groupe = rep(NA_character_, 5),
-    previsionnel = rep(NA_real_, 5),
-    notes = rep(NA_character_, 5)
+    id_ventilation = NA_character_,
+    rubrique = NA_character_,
+    groupe = NA_character_,
+    previsionnel = NA_real_,
+    notes = NA_character_
   )
+
   if (is.null(input$ventilation_fichier)) return(tbl_vide)
   
   res <- tryCatch(
@@ -1463,6 +1466,37 @@ fileInput(
 
 ```{r}
 renderUI({
+  if(is.null(config_ventilation())) return(NULL)
+  downloadButton("export_ventilation", "Exporter ventilation", class = "btn-primary")
+})
+
+export_ventilation <- reactive({
+  configuration <- config_ventilation()
+  ventilation_depenses <- ventilation()
+  
+  if (is.null(ventilation_depenses))
+    return(list(configuration = configuration))
+  
+  list(
+    configuration = configuration,
+    ventilation = ventilation_depenses
+  )
+})
+
+output$export_ventilation <- downloadHandler(
+  filename = nom_export_ventilation(),
+  content = function(file) {
+    writexl::write_xlsx(
+      export_ventilation(),
+      path = file
+    )
+  }
+)
+```
+
+
+```{r}
+renderUI({
   if(is.null(input$metadonnees_fichier)) return(NULL)
     HTML("<p><strong>Rapport synthétique</strong></p>")
 })
@@ -1474,6 +1508,29 @@ renderUI({
   if(is.null(input$metadonnees_fichier)) return(NULL)
     downloadButton("rapport", "Exporter en PDF", class = "btn-primary")
 })
+
+export_ventilation <- reactive({
+  configuration <- config_ventilation()
+  ventilation_depenses <- ventilation()
+  
+  if (is.null(ventilation_depenses))
+    return(list(configuration = configuration))
+  
+  list(
+    configuration = configuration,
+    ventilation = ventilation_depenses
+  )
+})
+
+output$export_ventilation <- downloadHandler(
+  filename = nom_export_ventilation(),
+  content = function(file) {
+    writexl::write_xlsx(
+      export_ventilation(),
+      path = file
+    )
+  }
+)
 
 output$rapport <- downloadHandler(
       filename = nom_rapport(),
@@ -1513,8 +1570,6 @@ output$rapport <- downloadHandler(
       }
     )
 ```
-
-
 
 <a href="./" class="btn btn-default" id="reset"><i class="fa fa-trash"></i> Réinitialiser</a>
 
@@ -1871,13 +1926,12 @@ renderDataTable({
 
 # Configuration de la ventilation {#config-ventilation data-navmenu="Ventilation budgétaire" data-navmenu-icon="fa-folder-tree"}
 
-### Instructions & Export
+### Instructions{data-height=150}
 
 <div style="font-size: .9em;">
 
 **Important :** afin de ne pas perdre votre saisie, cliquez sur le **bouton d'exportation**. Le fichier Excel généré peut-être être re-importé dans la colonne de gauche.<br />
 <strong style="color:red;">Attention :</strong> tout import d'un fichier de ventilation effacera les modifications non sauvegardées.<br />
-**Pour ajouter/supprimer une ligne&nbsp;:** utilisez le clic-droit de la souris.
 
 - **id_ventilation :** identifiant de la rubrique de ventilation. Cet élément est **obligatoire** et ne peut être vide. Privilégiez un nom court, sans accent. En cas de modification, les dépenses précédemment associées à cette rubrique de ventilation devront être ré-associées.
 - **rubrique :** nom de la rubrique de ventilation, telle qu'elle apparaîtra dans les rapports.
@@ -1914,7 +1968,8 @@ renderUI({
     )
   }
   
-  n_ids_manquants <- saisie_config_ventilation() |> 
+  n_ids_manquants <- 
+    saisie_config_ventilation() |> 
     filter(is.na(id_ventilation) & (!is.na(rubrique) | !is.na(previsionnel))) |> 
     nrow()
   if (n_ids_manquants > 0) {
@@ -1940,51 +1995,18 @@ renderUI({
   }
   
   list(
-    downloadButton("export_ventilation", "Exporter/Sauvegarder la ventilation budgétaire au format Excel", class = "btn-primary"),
     HTML(res)
   )
 })
 
-export_ventilation <- reactive({
-  configuration <- config_ventilation()
-  ventilation_depenses <- ventilation()
-  
-  if (is.null(ventilation_depenses))
-    return(list(configuration = configuration))
-  
-  list(
-    configuration = configuration,
-    ventilation = ventilation_depenses
-  )
-})
-
-output$export_ventilation <- downloadHandler(
-  filename = nom_export_ventilation(),
-  content = function(file) {
-    writexl::write_xlsx(
-      export_ventilation(),
-      path = file
-    )
-  }
-)
-
-output$export_ventilation2 <- downloadHandler(
-  filename = nom_export_ventilation(),
-  content = function(file) {
-    writexl::write_xlsx(
-      export_ventilation(),
-      path = file
-    )
-  }
-)
 ```
 
-### Saisie de la configuration des rubiques de ventilation
+### Saisie de la configuration des rubriques de ventilation
+
+**Pour ajouter/supprimer une ligne&nbsp;:** utilisez le clic-droit de la souris.
 
 ```{r}
-renderUI({
-  dataEditUI("edit_config_ventilation")
-})
+dataEditUI("edit_config_ventilation")
 
 saisie_config_ventilation <- dataEditServer(
   "edit_config_ventilation",
@@ -2004,26 +2026,6 @@ config_ventilation <- reactive({
 
 # Ventilation des dépenses {data-navmenu="Ventilation budgétaire"}
 
-### Instructions & Export {data-height=150}
-
-<div style="font-size: .9em;">
-
-**Important :** afin de ne pas perdre votre saisie, cliquez sur le **bouton d'exportation**. Le fichier Excel généré peut-être être re-importé dans la colonne de gauche.<br />
-<strong style="color:red;">Attention :</strong> tout import d'un fichier de ventilation ou modification de la configuration effacera les modifications non sauvegardées de la ventilation des dépenses.
-
-</div>
-
-```{r}
-renderUI({
-  res <- c("<p />")
-  list(
-    downloadButton("export_ventilation2", "Exporter/Sauvegarder la ventilation budgétaire au format Excel", class = "btn-primary"),
-    HTML(res)
-  )
-})
-```
-
-### Saisie de la ventilation budgétaire
 
 ```{r}
 noms_ventilation <- function(id_ventilation, rubrique, groupe) {
@@ -2063,8 +2065,13 @@ import_ventilation_depenses <- reactive({
 })
 
 renderUI({
+  res <- list(HTML(
+    "Aucune dépense chargée."
+  ))
+  
+  
   dep <- import_ventilation_depenses()
-  if (is.null(dep)) return(NULL)
+  if (is.null(dep)) return(res)
   
   "%add%" <- function(x, y) {append(x, list(y))}
   
@@ -2094,6 +2101,9 @@ renderUI({
     )
 
   res <- list(HTML(
+    "<strong>Important :</strong> afin de ne pas perdre votre saisie, cliquez sur le <strong>bouton d'exportation</strong> (colonne de gauche). Le fichier Excel généré peut-être être ré-importé dans la colonne de gauche.<br />",
+    "<strong style=\"color:red;\">Attention :</strong> tout import d'un fichier de ventilation ou modification de la configuration effacera les modifications non sauvegardées de la ventilation des dépenses.<br />",
+    "<strong style=\"color:green;\">Astuce :</strong> si le défilement ne s'active pas correctement, vous pouvez cliquez deux fois sur le bouton <i>Exclure les dépenses nulles</i> pour forcer la page à afficher l'ascenseur de défilement.",
     "<table class='table table-striped table-hover table-bordered spacing-s' width='100%'><thead><tr>",
     "<th>Identifiant</th>",
     "<th>Année</th>",

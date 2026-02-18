@@ -3,7 +3,7 @@
   font-weight: bold;
 }
 
-#rapport, #reset {
+#rapport, #reset, #export_ventilation {
   width: 100%;
   padding: 15px;
 }
