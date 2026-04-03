@@ -2567,6 +2567,8 @@ renderDataTable({
 
 # Aide {data-icon="fa-circle-question"}
 
+**Guide / Mode d'emploi :** [TBB_fiche_procedure.pdf](https://github.com/larmarange/tbb/raw/main/TBB_fiche_procedure.pdf)
+
 **Modèle Excel pour les métadonnées :** [metadonnees_modele.xlsx](https://github.com/larmarange/tbb/raw/main/metadonnees_modele.xlsx)
 
 **Fichiers d'export MAP :** il est possible de charger plusieurs fichiers simultanément dans le tableau de bord. Dans ce cas, les dépenses des différents fichiers s'additionnent.
