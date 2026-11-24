@@ -1069,7 +1069,7 @@ nom_rapport <- reactive({
   projet <- metas()$nom
   if (is.null(projet)) {
     return(paste0(
-      "tableau_de_bord_budgetaire_v", lubridate::today(), ".pdf"
+      "tbb_", lubridate::today(), ".pdf"
     ))
   } else {
     projet <- projet |> 
@@ -1077,7 +1077,7 @@ nom_rapport <- reactive({
       make.names() |> 
       stringr::str_replace_all(fixed("."), "_")
     return(paste0(
-      "tableau_de_bord_budgetaire_", projet, "_v", lubridate::today(), ".pdf"
+      "tbb_", projet, "_", lubridate::today(), ".pdf"
     ))
   }
 })
