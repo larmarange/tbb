@@ -2015,8 +2015,22 @@ saisie_config_ventilation <- dataEditServer(
   col_names = FALSE
 )
 
+# si NULL on charge un tableau vide
+remplace_ventilation_null <- function(x) {
+  tbl_vide <- tibble(
+    id_ventilation = NA_character_,
+    rubrique = NA_character_,
+    groupe = NA_character_,
+    previsionnel = NA_real_,
+    notes = NA_character_
+  )
+  if (is.null(x)) return(tbl_vide)
+  x
+}
+
 config_ventilation <- reactive({
   saisie_config_ventilation() |> 
+    remplace_ventilation_null() |> 
     dplyr::filter(!is.na(id_ventilation)) |> 
     mutate(previsionnel = round(previsionnel, digits = 2)) |> 
     distinct(id_ventilation, .keep_all = TRUE) |> 
