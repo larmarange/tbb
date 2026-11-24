@@ -96,7 +96,7 @@ transformer_metas <- function(metas_long) {
   if (is.null(metas_long)) return(NULL)
   
   metas <- metas_long |>
-    filter(!is.na(id)) |> 
+    dplyr::filter(!is.na(id)) |> 
     select(id, valeur) |>
     tidyr::pivot_wider(
       names_from = id,
@@ -141,7 +141,7 @@ lecture_repartition <- function(fichier) {
     return(NULL)
   
   repartition|> 
-    filter(!is.na(annee) & !is.na(type)) |> 
+    dplyr::filter(!is.na(annee) & !is.na(type)) |> 
     tidyr::replace_na(list(montant = 0))
 }
 
@@ -152,7 +152,7 @@ budget_fonctionnement <- reactive({
     return(NULL)
   
   repartition() |> 
-    filter(type == "Fonctionnement") |> 
+    dplyr::filter(type == "Fonctionnement") |> 
     pull("montant") |> 
     sum(na.rm = TRUE)
 })
@@ -161,7 +161,7 @@ budget_investissement <- reactive({
   if (is.null(repartition()))
     return(NULL)
   repartition() |> 
-    filter(type == "Investissement") |> 
+    dplyr::filter(type == "Investissement") |> 
     pull("montant") |> 
     sum(na.rm = TRUE)
 })
@@ -170,7 +170,7 @@ budget_personnel <- reactive({
   if (is.null(repartition()))
     return(NULL)
   repartition() |> 
-    filter(type == "Personnel") |> 
+    dplyr::filter(type == "Personnel") |> 
     pull("montant") |> 
     sum(na.rm = TRUE)
 })
@@ -231,7 +231,7 @@ lecture_personnel <- function(fichier) {
   
   personnel <- personnel |> 
     select(-any_of("total")) |> 
-    filter(!is.na(id)) |> 
+    dplyr::filter(!is.na(id)) |> 
     tidyr::replace_na(list(reserve = 0, paye = 0))
   
   if (nrow(personnel) == 0)
@@ -300,7 +300,7 @@ lecture_autres_depenses <- function(fichier) {
   
   autres_dep <- autres_dep |> 
     select(-any_of("total")) |> 
-    filter(!is.na(id))
+    dplyr::filter(!is.na(id))
   
   if (nrow(autres_dep) == 0)
     return(tibble::tibble())
@@ -363,7 +363,7 @@ cols_map_optionnelles_toutes <- c(
 
 map_trouver_mission_depuis_commande <- function(data, cmde) {
   tmp <- data %>% 
-    filter(`Cde achat : Num pièce` == cmde) %>%
+    dplyr::filter(`Cde achat : Num pièce` == cmde) %>%
     arrange(desc(`Dépl. : N° déplacement`))
   if (nrow(tmp) >  0)
     tmp$`Dépl. : N° déplacement`[1]
@@ -373,7 +373,7 @@ map_trouver_mission_depuis_commande <- function(data, cmde) {
 
 map_verif_existance_commande <- function(data, cmde) {
   tmp <- data %>% 
-    filter(`Cde achat : Num pièce` == cmde)
+    dplyr::filter(`Cde achat : Num pièce` == cmde)
   if (nrow(tmp) >  0)
     cmde
   else
@@ -547,7 +547,7 @@ calcul_depenses_map <- function(map) {
     )
   
   missions <- map |> 
-    filter(type_depense == "deplacement")
+    dplyr::filter(type_depense == "deplacement")
   
   if (nrow(missions) == 0) {
     missions <- tibble::tibble()
@@ -578,7 +578,7 @@ calcul_depenses_map <- function(map) {
   }
   
   commandes <- map |> 
-    filter(type_depense == "commande")
+    dplyr::filter(type_depense == "commande")
   
   if (nrow(commandes) == 0) {
     commandes <- tibble::tibble()
@@ -609,7 +609,7 @@ calcul_depenses_map <- function(map) {
   }
   
   factures <- map |> 
-    filter(type_depense == "facture")
+    dplyr::filter(type_depense == "facture")
   
   if (nrow(factures) == 0) {
     factures <- tibble::tibble()
@@ -638,7 +638,7 @@ calcul_depenses_map <- function(map) {
   }
   
   non_identifiees <- map |> 
-    filter(type_depense == "autre")
+    dplyr::filter(type_depense == "autre")
   
   if(nrow(non_identifiees) == 0) {
     non_identifiees <- tibble::tibble()
@@ -842,7 +842,7 @@ depenses <- reactive({
   # masquer les dépenses nulles -----------
   if (input$exclure_dep_nulles == "TRUE") {
     dep <- dep |> 
-      filter(montant != 0)
+      dplyr::filter(montant != 0)
   }
   
   
@@ -969,7 +969,7 @@ plot_conso_annuelle <- reactive({
       values_to = "montant"
     ) |> 
     mutate(groupe = "consommé") |> 
-    filter(montant != 0)
+    dplyr::filter(montant != 0)
   
   previ <- repartition()
   if (!is.null(previ)) {
@@ -1970,7 +1970,7 @@ renderUI({
   
   n_ids_manquants <- 
     saisie_config_ventilation() |> 
-    filter(is.na(id_ventilation) & (!is.na(rubrique) | !is.na(previsionnel))) |> 
+    dplyr::filter(is.na(id_ventilation) & (!is.na(rubrique) | !is.na(previsionnel))) |> 
     nrow()
   if (n_ids_manquants > 0) {
     res <- c(
@@ -1982,7 +1982,7 @@ renderUI({
   }
   
   duplicated_id <- saisie_config_ventilation() |> 
-    filter(!is.na(id_ventilation)) |> 
+    dplyr::filter(!is.na(id_ventilation)) |> 
     pull(id_ventilation)
   duplicated_id <- duplicated_id[duplicated(duplicated_id)] |> unique()
   if (length(duplicated_id) > 0) {
@@ -2017,7 +2017,7 @@ saisie_config_ventilation <- dataEditServer(
 
 config_ventilation <- reactive({
   saisie_config_ventilation() |> 
-    filter(!is.na(id_ventilation)) |> 
+    dplyr::filter(!is.na(id_ventilation)) |> 
     mutate(previsionnel = round(previsionnel, digits = 2)) |> 
     distinct(id_ventilation, .keep_all = TRUE) |> 
     arrange(groupe)
@@ -2218,7 +2218,7 @@ plot_conso_ventilation <- reactive({
       values_to = "montant"
     ) |>
     mutate(groupe = "consommé") |>
-    filter(montant != 0)
+    dplyr::filter(montant != 0)
   
   config <- config_ventilation()
   if (is.null(config)) return(NULL)
@@ -2309,7 +2309,7 @@ tableau_consommation_ventilation <- reactive({
   tbl <- conso |>
     group_by(id_ventilation, annee, .drop = FALSE) |>
     summarise(consomme = sum(consomme, na.rm = TRUE)) |>
-    filter(!is.na(annee)) |> 
+    dplyr::filter(!is.na(annee)) |> 
     tidyr::pivot_wider(
       names_from = annee,
       values_from = consomme,
@@ -2441,7 +2441,7 @@ renderUI({
   # masquer les dépenses nulles -----------
   if (input$exclure_dep_nulles == "TRUE") {
     dep <- dep |> 
-      filter(reserve + engage + paye + bloque != 0)
+      dplyr::filter(reserve + engage + paye + bloque != 0)
   }
   
   details <- depenses_map_brutes() |> 
@@ -2465,8 +2465,8 @@ renderUI({
   
   for (i in dep$id) {
     res <- c(res, "<div class='une_depense'>")
-    details_one <- details |> filter(id == i)
-    dep_one <- dep |> filter(id == i)
+    details_one <- details |> dplyr::filter(id == i)
+    dep_one <- dep |> dplyr::filter(id == i)
     type_depense <- details_one$type_depense[1]
     reserve <- dep_one$reserve
     engage <- dep_one$engage
